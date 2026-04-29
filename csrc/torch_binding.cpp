@@ -2101,6 +2101,19 @@ std::vector<int64_t> get_npu_storage_shape(const at::Tensor& tensor)
     return std::vector<int64_t>(desc.storage_sizes_.begin(), desc.storage_sizes_.end());
 }
 
+at::Tensor npu_gumbel_sample(
+    const at::Tensor& logits,
+    const at::Tensor& temperature,
+    const at::Tensor& seeds,
+    const at::Tensor& pos,
+    bool apply_temperature)
+{
+    int64_t num_reqs = logits.size(0);
+    auto device = logits.device();
+    at::Tensor sampled = at::empty({num_reqs}, at::dtype(at::kLong).device(device));
+    EXEC_NPU_CMD(aclnnGumbelSample, logits, temperature, seeds, pos, apply_temperature, sampled);
+    return sampled;
+}
 
 } // namespace vllm_ascend
 
@@ -2832,5 +2845,11 @@ TORCH_LIBRARY_EXPAND(CONCAT(_C, _ascend), ops)
         "                     float beta=1.0, "
         "                     float threshold=20.0) -> (Tensor g, Tensor beta_output)");
     ops.impl("npu_fused_gdn_gating", torch::kPrivateUse1, &vllm_ascend::npu_fused_gdn_gating);
+
+    ops.def(
+        "npu_gumbel_sample(Tensor logits, Tensor temperature, Tensor seeds, Tensor pos, "
+        "bool apply_temperature=True) -> Tensor"
+    );
+    ops.impl("npu_gumbel_sample", torch::kPrivateUse1, &vllm_ascend::npu_gumbel_sample);
 }
 #endif

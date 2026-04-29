@@ -1678,7 +1678,18 @@ void store_kv_block(
 {
     return;
 
-} 
+}
+
+at::Tensor npu_gumbel_sample_meta(
+    const at::Tensor& logits,
+    const at::Tensor& temperature,
+    const at::Tensor& seeds,
+    const at::Tensor& pos,
+    bool apply_temperature)
+{
+    int64_t num_reqs = logits.size(0);
+    return at::empty({num_reqs}, logits.options().dtype(at::kLong));
+}
 
 } // namespace meta
 } // namespace vllm_ascend
@@ -1797,6 +1808,8 @@ TORCH_LIBRARY_IMPL_EXPAND(CONCAT(_C, _ascend), Meta, ops) {
     ops.impl("store_kv_block", &vllm_ascend::meta::store_kv_block);
     // npu_fused_gdn_gating
     ops.impl("npu_fused_gdn_gating", &vllm_ascend::meta::npu_fused_gdn_gating_meta);
+    // GumbelSample
+    ops.impl("npu_gumbel_sample", &vllm_ascend::meta::npu_gumbel_sample_meta);
 }
 }
 #endif
