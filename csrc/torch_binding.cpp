@@ -2103,16 +2103,24 @@ std::vector<int64_t> get_npu_storage_shape(const at::Tensor& tensor)
 
 at::Tensor npu_gumbel_sample(
     const at::Tensor& logits,
+    const at::Tensor& idx_mapping,
     const at::Tensor& temperature,
     const at::Tensor& seeds,
     const at::Tensor& pos,
-    const at::Tensor& idx_mapping,
-    bool apply_temperature)
+    bool apply_temperature,
+    const c10::optional<at::Tensor>& output_processed_logits,
+    const c10::optional<at::Tensor>& output_processed_logits_col)
 {
     int64_t num_tokens = logits.size(0);
     auto device = logits.device();
     at::Tensor sampled = at::empty({num_tokens}, at::dtype(at::kLong).device(device));
-    EXEC_NPU_CMD(aclnnGumbelSample, logits, temperature, seeds, pos, idx_mapping, apply_temperature, sampled);
+    EXEC_NPU_CMD(
+        aclnnGumbelSample,
+        logits, idx_mapping, temperature, seeds, pos,
+        output_processed_logits_col,
+        apply_temperature,
+        sampled, output_processed_logits
+    );
     return sampled;
 }
 
@@ -2848,8 +2856,9 @@ TORCH_LIBRARY_EXPAND(CONCAT(_C, _ascend), ops)
     ops.impl("npu_fused_gdn_gating", torch::kPrivateUse1, &vllm_ascend::npu_fused_gdn_gating);
 
     ops.def(
-        "npu_gumbel_sample(Tensor logits, Tensor temperature, Tensor seeds, Tensor pos, "
-        "Tensor idx_mapping, bool apply_temperature=True) -> Tensor"
+        "npu_gumbel_sample(Tensor logits, Tensor idx_mapping, Tensor temperature, Tensor seeds, Tensor pos, "
+        "bool apply_temperature=True, Tensor(a!)? output_processed_logits=None, "
+        "Tensor? output_processed_logits_col=None) -> Tensor"
     );
     ops.impl("npu_gumbel_sample", torch::kPrivateUse1, &vllm_ascend::npu_gumbel_sample);
 }
