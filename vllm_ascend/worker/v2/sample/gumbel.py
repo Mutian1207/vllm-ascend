@@ -200,6 +200,7 @@ def gumbel_sample(
             BLOCK_SIZE=BLOCK_SIZE,
             APPLY_TEMPERATURE=apply_temperature,
         )
+        # NOTE(woosuk): Use int64 for later indexing.
         max_block_idx = local_max.argmax(dim=-1, keepdim=True)
         sampled = local_argmax.gather(dim=-1, index=max_block_idx).view(-1)
     else:
