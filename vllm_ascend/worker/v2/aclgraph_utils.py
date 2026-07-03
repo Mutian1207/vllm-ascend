@@ -34,6 +34,7 @@ from vllm.v1.worker.utils import AttentionGroup
 
 from vllm_ascend.ascend_forward_context import _EXTRA_CTX
 from vllm_ascend.compilation.acl_graph import set_graph_params, update_full_graph_params
+from vllm_ascend.worker.v2.trace import log as trace_log
 from vllm_ascend.worker.v2.utils import communicator_switch
 
 
@@ -60,15 +61,32 @@ class ModelAclGraphManager(ModelCudaGraphManager):
         self.model_runner = model_runner
         # capture_sizes sorts in ascending order.
         self.capture_sizes = sorted(self.compilation_config.cudagraph_capture_sizes)
+        trace_log(
+            "aclgraph.init",
+            "cudagraph_mode=%s decode_query_len=%s capture_sizes=%s "
+            "needs_capture=%s",
+            cudagraph_mode,
+            decode_query_len,
+            self.capture_sizes,
+            super().needs_capture(),
+        )
         # vllm-ascend need to update graph params of attention backend.
         # so we need to set graph params before capture full graph.
         if super().needs_capture():
             set_graph_params(self.capture_sizes)
+            trace_log("aclgraph.init.set_graph_params", "capture_sizes=%s", self.capture_sizes)
 
     def run_fullgraph(self, desc: BatchExecutionDescriptor) -> torch.Tensor | tuple[torch.Tensor, list[torch.Tensor]]:
         """Override run_fullgraph to update full graph params in run_fullgraph."""
         num_tokens = desc.num_tokens
         logger.info_once("run_fullgraph with num_tokens=%s", num_tokens)
+        trace_log(
+            "aclgraph.run_fullgraph.start",
+            "num_tokens=%s cg_mode=%s num_reqs=%s",
+            num_tokens,
+            desc.cg_mode,
+            desc.num_reqs,
+        )
         ret = super().run_fullgraph(desc)
 
         positions = self.model_runner.input_buffers.positions[:num_tokens]
@@ -95,6 +113,13 @@ class ModelAclGraphManager(ModelCudaGraphManager):
                 self.model_runner.speculative_config,
                 positions.shape[0],
             )
+        trace_log(
+            "aclgraph.run_fullgraph.done",
+            "positions=%s num_tokens_across_dp_shape=%s ret_type=%s",
+            tuple(positions.shape),
+            tuple(num_tokens_across_dp.shape),
+            type(ret).__name__,
+        )
         return ret
 
     def capture(
@@ -111,9 +136,18 @@ class ModelAclGraphManager(ModelCudaGraphManager):
         progress_bar_desc: str = "Capturing CUDA graphs",
     ) -> None:
         """Capture CUDA graphs for model forward pass."""
+        trace_log(
+            "aclgraph.capture.start",
+            "model=%s has_lora=%s use_aux_hidden_state_outputs=%s "
+            "progress=%s",
+            type(model).__name__,
+            has_lora,
+            use_aux_hidden_state_outputs,
+            progress_bar_desc,
+        )
         model = ModelWithContext(model)
         with communicator_switch():
-            return super().capture(
+            ret = super().capture(
                 model,
                 model_state,
                 input_buffers,
@@ -125,6 +159,8 @@ class ModelAclGraphManager(ModelCudaGraphManager):
                 use_aux_hidden_state_outputs,
                 progress_bar_desc,
             )
+        trace_log("aclgraph.capture.done", "completed")
+        return ret
 
 
 class ModelWithContext(nn.Module):
@@ -137,11 +173,26 @@ class ModelWithContext(nn.Module):
         self.original_model = original_model
         self.is_draft_model = is_draft_model
         self.is_draft_model_prefill = is_draft_model_prefill
+        trace_log(
+            "model_with_context.init",
+            "original_model=%s is_draft_model=%s is_draft_model_prefill=%s",
+            type(original_model).__name__,
+            is_draft_model,
+            is_draft_model_prefill,
+        )
 
     def forward(self, *args, **kwargs):
         # In warmup phase, capturing=False by default.
         # when capturing, we need to set capturing=True in forward context.
-        if torch.npu.is_current_stream_capturing():
+        is_capturing = torch.npu.is_current_stream_capturing()
+        trace_log(
+            "model_with_context.forward",
+            "is_capturing=%s is_draft_model=%s is_draft_model_prefill=%s",
+            is_capturing,
+            self.is_draft_model,
+            self.is_draft_model_prefill,
+        )
+        if is_capturing:
             _EXTRA_CTX.capturing = True
         if self.is_draft_model:
             _EXTRA_CTX.is_draft_model = True

@@ -20,6 +20,8 @@
 import torch
 from vllm.v1.worker.gpu.states import RequestState
 
+from vllm_ascend.worker.v2.trace import log as trace_log
+
 
 class AscendRequestState(RequestState):
     """Request state for Ascend NPUs."""
@@ -51,6 +53,16 @@ class AscendRequestState(RequestState):
             dtype=torch.int32,
             device="cpu",
         )
+        trace_log(
+            "request_state.init",
+            "max_num_reqs=%s max_model_len=%s max_num_batched_tokens=%s "
+            "num_speculative_steps=%s device=%s",
+            max_num_reqs,
+            max_model_len,
+            max_num_batched_tokens,
+            num_speculative_steps,
+            device,
+        )
 
     def add_request(
         self,
@@ -69,3 +81,15 @@ class AscendRequestState(RequestState):
         )
         req_idx = self.req_id_to_index[req_id]
         self.num_computed_tokens_cpu[req_idx] = num_computed_tokens
+        trace_log(
+            "request_state.add",
+            "req_id=%s req_idx=%s prompt_len=%s prefill_len=%s "
+            "num_computed_tokens=%s max_tokens=%s free_slots=%s",
+            req_id,
+            req_idx,
+            prompt_len,
+            len(all_token_ids),
+            num_computed_tokens,
+            max_tokens,
+            len(self.free_indices),
+        )

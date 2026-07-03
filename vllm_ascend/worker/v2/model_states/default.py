@@ -27,6 +27,7 @@ from vllm.v1.worker.utils import AttentionGroup
 
 from vllm_ascend.worker.v2.attn_utils import build_attn_metadata
 from vllm_ascend.worker.v2.input_batch import AscendInputBatch
+from vllm_ascend.worker.v2.trace import log as trace_log
 
 
 class AscendModelState(DefaultModelState):
@@ -51,6 +52,16 @@ class AscendModelState(DefaultModelState):
             # For piecewise cudagraphs and eager, use unpadded sizes.
             num_reqs = input_batch.num_reqs
             num_tokens = input_batch.num_tokens
+        trace_log(
+            "model_state.prepare_attn.start",
+            "cudagraph_mode=%s for_capture=%s num_reqs=%s num_tokens=%s "
+            "attn_state=%s",
+            cudagraph_mode,
+            for_capture,
+            num_reqs,
+            num_tokens,
+            input_batch.attn_state,
+        )
         query_start_loc_cpu = torch.from_numpy(input_batch.query_start_loc_np)
         max_query_len = input_batch.num_scheduled_tokens.max().item()
         # attn_metadata is needed when update_full_graph_params, but no way can get it now.
@@ -73,5 +84,12 @@ class AscendModelState(DefaultModelState):
             positions=input_batch.positions,
             attn_state=input_batch.attn_state,
             for_cudagraph_capture=for_capture,
+        )
+        trace_log(
+            "model_state.prepare_attn.done",
+            "metadata_layers=%s max_query_len=%s query_start_loc_np=%s",
+            list(self.attn_metadata.keys())[:8],
+            max_query_len,
+            input_batch.query_start_loc_np.tolist(),
         )
         return self.attn_metadata
