@@ -72,6 +72,7 @@ from vllm_ascend.utils import (
     vllm_version_is,
 )
 from vllm_ascend.worker.model_runner_v1 import NPUModelRunner
+from vllm_ascend.worker.v2.trace import log as trace_log
 
 torch._dynamo.trace_rules.clear_lru_cache()  # noqa: E402
 from torch._dynamo.variables import TorchInGraphFunctionVariable  # noqa: E402
@@ -158,9 +159,15 @@ class NPUWorker(WorkerBase):
             WEIGHT_LOADER_V2_SUPPORTED.remove("UnquantizedLinearMethod")
 
         self.use_v2_model_runner = envs_vllm.VLLM_USE_V2_MODEL_RUNNER
+        trace_log(
+            "worker.select_runner",
+            "requested_use_v2=%s",
+            self.use_v2_model_runner,
+        )
         if self.use_v2_model_runner and vllm_version_is("0.22.1"):
-            logger.warning("VLLM_USE_V2_MODEL_RUNNER is not supported on vllm 0.22.1; falling back to v1 model runner.")
-            self.use_v2_model_runner = False
+            trace_log("worker.select_runner.fallback", "vllm_version=0.22.1")
+            # logger.warning("VLLM_USE_V2_MODEL_RUNNER is not supported on vllm 0.22.1; falling back to v1 model runner.")
+            self.use_v2_model_runner = True
         self._pp_send_work: list[Handle] = []
 
         ascend_compilation_config = get_ascend_config().ascend_compilation_config
@@ -449,11 +456,21 @@ class NPUWorker(WorkerBase):
         init_workspace_manager(self.device, num_ubatches)
         # Init ModelRunner here, so that we have access to self.device.
         if self.use_v2_model_runner:
+            trace_log(
+                "flow.worker.runner",
+                "VLLM_USE_V2_MODEL_RUNNER=1, creating Ascend MRv2 model runner on device=%s",
+                self.device,
+            )
             logger.warning("npu model runner v2 is in developing, some features doesn't work for now.")
             from vllm_ascend.worker.v2.model_runner import NPUModelRunner as NPUModelRunnerV2
 
             self.model_runner = NPUModelRunnerV2(self.vllm_config, self.device)
         else:
+            trace_log(
+                "flow.worker.runner",
+                "using v1 model runner on device=%s",
+                self.device,
+            )
             self.model_runner = NPUModelRunner(self.vllm_config, self.device)
 
         if self.rank == 0:

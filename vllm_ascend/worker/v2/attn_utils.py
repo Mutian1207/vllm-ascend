@@ -42,8 +42,50 @@ from vllm_ascend.attention.attention_v1 import AscendAttentionState
 from vllm_ascend.attention.utils import AscendCommonAttentionMetadata, AscendPrefillContextParallelMetadata
 from vllm_ascend.quantization.utils import enable_fa_quant
 from vllm_ascend.utils import calc_split_factor
+from vllm_ascend.worker.v2.trace import describe_attrs, describe_value
+from vllm_ascend.worker.v2.trace import log as trace_log
 
 _ATTENTION_MASK_BUILDER = None
+
+
+def _describe_kv_cache_spec(spec: Any) -> dict[str, Any]:
+    return describe_attrs(
+        spec,
+        (
+            "block_size",
+            "storage_block_size",
+            "page_size_bytes",
+            "num_kv_heads",
+            "head_size",
+            "head_size_v",
+            "dtype",
+            "cache_dtype_str",
+        ),
+    ) | {"type": type(spec).__name__}
+
+
+def _describe_kv_cache_config(config: KVCacheConfig) -> dict[str, Any]:
+    return {
+        "num_blocks": getattr(config, "num_blocks", None),
+        "kv_cache_groups": [
+            {
+                "group_id": i,
+                "layers": group.layer_names[:6],
+                "num_layers": len(group.layer_names),
+                "spec": _describe_kv_cache_spec(group.kv_cache_spec),
+            }
+            for i, group in enumerate(config.kv_cache_groups[:4])
+        ],
+        "kv_cache_tensors": [
+            {
+                "tensor_id": i,
+                "size": getattr(tensor, "size", None),
+                "shared_by": getattr(tensor, "shared_by", [])[:6],
+                "num_shared_layers": len(getattr(tensor, "shared_by", [])),
+            }
+            for i, tensor in enumerate(config.kv_cache_tensors[:4])
+        ],
+    }
 
 
 def get_attn_mask_builder(device: torch.device):
@@ -81,6 +123,28 @@ def build_attn_metadata(
 ) -> dict[str, Any]:
     """Build attention metadata for Ascend NPUs."""
     # TODO(Ronald1995): optimize AscendCommonAttentionMetadata.
+    trace_log(
+        "attn_metadata.start",
+        "num_reqs=%s num_tokens=%s max_query_len=%s max_seq_len=%s "
+        "attn_state=%s for_capture=%s graph_pad_size=%s",
+        num_reqs,
+        num_tokens,
+        max_query_len,
+        max_seq_len,
+        attn_state,
+        for_cudagraph_capture,
+        graph_pad_size,
+    )
+    trace_log(
+        "attn_metadata.struct.inputs",
+        "query_start_loc_gpu=%s query_start_loc_cpu=%s seq_lens=%s "
+        "positions=%s seq_lens_np=%s",
+        describe_value(query_start_loc_gpu),
+        describe_value(query_start_loc_cpu),
+        describe_value(seq_lens),
+        describe_value(positions),
+        describe_value(seq_lens_np) if seq_lens_np is not None else None,
+    )
 
     # seq_lens_np is used for ascend npus, it maybe None in spec_decode case,
     # we fill it with max_seq_len in case `attn_metadata_builder.build` raise
@@ -94,6 +158,26 @@ def build_attn_metadata(
     for i, kv_cache_spec in enumerate(kv_cache_groups):
         block_table = block_tables[i]
         slot_mapping = slot_mappings[i]
+        trace_log(
+            "attn_metadata.group",
+            "group=%s layers=%s block_table_shape=%s slot_mapping_shape=%s",
+            i,
+            kv_cache_spec.layer_names[:8],
+            tuple(block_table.shape) if hasattr(block_table, "shape") else None,
+            tuple(slot_mapping.shape) if hasattr(slot_mapping, "shape") else None,
+        )
+        trace_log(
+            "attn_metadata.struct.group",
+            "group=%s kv_group=%s block_table=%s slot_mapping=%s",
+            i,
+            {
+                "layers": kv_cache_spec.layer_names[:6],
+                "num_layers": len(kv_cache_spec.layer_names),
+                "spec": _describe_kv_cache_spec(kv_cache_spec.kv_cache_spec),
+            },
+            describe_value(block_table),
+            describe_value(slot_mapping),
+        )
 
         common_attn_metadata_extra_kwargs = (
             model_specific_attn_metadata.get_extra_common_attn_kwargs(i, num_reqs)
@@ -119,6 +203,27 @@ def build_attn_metadata(
             max_seq_len=max_seq_len,
             **common_attn_metadata_extra_kwargs,
         )
+        trace_log(
+            "attn_metadata.struct.common",
+            "group=%s common_metadata_type=%s fields=%s extra_common_kwargs=%s",
+            i,
+            type(common_attn_metadata).__name__,
+            describe_attrs(
+                common_attn_metadata,
+                (
+                    "num_reqs",
+                    "num_actual_tokens",
+                    "max_query_len",
+                    "max_seq_len",
+                    "attn_state",
+                    "graph_pad_size",
+                    "query_start_loc_cpu",
+                    "seq_lens_cpu",
+                    "seq_lens",
+                ),
+            ),
+            list(common_attn_metadata_extra_kwargs.keys()),
+        )
 
         for attn_group in attn_groups[i]:
             attn_metadata_builder = attn_group.get_metadata_builder(0)
@@ -140,6 +245,19 @@ def build_attn_metadata(
                 )
             for layer_name in attn_group.layer_names:
                 attn_metadata[layer_name] = metadata
+            trace_log(
+                "attn_metadata.struct.built",
+                "group=%s builder=%s metadata_type=%s layers=%s",
+                i,
+                type(attn_metadata_builder).__name__,
+                type(metadata).__name__,
+                attn_group.layer_names[:6],
+            )
+    trace_log(
+        "attn_metadata.done",
+        "metadata_layers=%s",
+        list(attn_metadata.keys())[:8],
+    )
     return attn_metadata
 
 
@@ -181,6 +299,16 @@ def build_attn_state(
         attn_state = AscendAttentionState.ChunkedPrefill
     else:
         attn_state = AscendAttentionState.PrefillCacheHit
+    trace_log(
+        "attn_state",
+        "num_reqs=%s seq_lens_np=%s num_scheduled_tokens=%s "
+        "num_valid_tokens=%s result=%s",
+        num_reqs,
+        seq_lens_np[:num_reqs].tolist(),
+        num_scheduled_tokens.tolist(),
+        num_valid_tokens.tolist(),
+        attn_state,
+    )
     return attn_state
 
 
@@ -235,6 +363,23 @@ def _allocate_kv_cache(
             to their corresponding memory buffer for K cache and V cache
     """
     vllm_config = get_current_vllm_config()
+    trace_log(
+        "kv_cache.allocate.start",
+        "kv_cache_tensors=%s groups=%s device=%s kv_transfer=%s",
+        len(kv_cache_config.kv_cache_tensors),
+        len(kv_cache_config.kv_cache_groups),
+        device,
+        vllm_config.kv_transfer_config is not None,
+    )
+    trace_log(
+        "kv_cache.struct.config",
+        "config=%s shared_layers=%s",
+        _describe_kv_cache_config(kv_cache_config),
+        {
+            "len": len(shared_layers),
+            "sample": list(shared_layers.items())[:6],
+        },
+    )
 
     # init kv cache tensors
     kv_cache_raw_tensors: dict[str, tuple[torch.Tensor, torch.Tensor]] = {}
@@ -254,6 +399,14 @@ def _allocate_kv_cache(
         example_layer_name = kv_cache_tensor.shared_by[0]
         example_kv_cache_spec = layer_kv_cache_spec[example_layer_name]
         assert isinstance(example_kv_cache_spec, AttentionSpec)
+        trace_log(
+            "kv_cache.struct.tensor_spec",
+            "shared_by=%s example_layer=%s tensor_size=%s spec=%s",
+            kv_cache_tensor.shared_by[:8],
+            example_layer_name,
+            kv_cache_tensor.size,
+            _describe_kv_cache_spec(example_kv_cache_spec),
+        )
 
         k_dim, v_dim = _get_attention_kv_cache_dims(example_layer_name, example_kv_cache_spec)
         assert k_dim > 0 and v_dim > 0
@@ -277,6 +430,24 @@ def _allocate_kv_cache(
             v_tensor = _align_memory(v_tensor, alignment)[:v_tensor_size]
         for layer_name in kv_cache_tensor.shared_by:
             kv_cache_raw_tensors[layer_name] = (k_tensor, v_tensor)
+        trace_log(
+            "kv_cache.allocate.tensor",
+            "layers=%s k_size=%s v_size=%s k_dim=%s v_dim=%s",
+            kv_cache_tensor.shared_by[:8],
+            k_tensor_size,
+            v_tensor_size,
+            k_dim,
+            v_dim,
+        )
+        trace_log(
+            "kv_cache.struct.raw_tensor",
+            "layers=%s k_tensor=%s v_tensor=%s split_factor=(%s,%s)",
+            kv_cache_tensor.shared_by[:8],
+            describe_value(k_tensor),
+            describe_value(v_tensor),
+            k_tensor_split_factor,
+            v_tensor_split_factor,
+        )
 
     layer_names = set()
     for group in kv_cache_config.kv_cache_groups:
@@ -286,6 +457,12 @@ def _allocate_kv_cache(
         "Some layers are not correctly initialized"
     )
 
+    trace_log(
+        "kv_cache.allocate.done",
+        "raw_layers=%s shared_layers=%s",
+        len(kv_cache_raw_tensors),
+        len(shared_layers),
+    )
     return kv_cache_raw_tensors
 
 
@@ -309,6 +486,27 @@ def _reshape_kv_cache(
             to their corresponding memory buffer for KV cache
     """
     vllm_config = get_current_vllm_config()
+    trace_log(
+        "kv_cache.reshape.start",
+        "groups=%s raw_layers=%s shared_layers=%s",
+        len(kv_cache_config.kv_cache_groups),
+        len(kv_cache_raw_tensors),
+        len(shared_kv_cache_layers or {}),
+    )
+    trace_log(
+        "kv_cache.struct.reshape_inputs",
+        "config=%s raw_layer_sample=%s backend_sample=%s "
+        "cache_dtype=%s kernel_block_sizes=%s shared_layers=%s",
+        _describe_kv_cache_config(kv_cache_config),
+        list(kv_cache_raw_tensors.keys())[:8],
+        {
+            layer: type(backend).__name__
+            for layer, backend in list(attn_backends.items())[:6]
+        },
+        cache_dtype,
+        kernel_block_sizes,
+        list((shared_kv_cache_layers or {}).items())[:6],
+    )
 
     kv_caches: dict[str, tuple[torch.Tensor, torch.Tensor]] = {}
     kernel_block_sizes = kernel_block_sizes or []
@@ -357,6 +555,22 @@ def _reshape_kv_cache(
                     kv_cache_spec.head_size,
                     cache_dtype,
                 )
+                trace_log(
+                    "kv_cache.struct.reshape_plan",
+                    "layer=%s group=%s spec=%s backend=%s raw_k=%s raw_v=%s "
+                    "sum_page_size_bytes=%s num_blocks_before_kernel=%s "
+                    "kv_cache_shape=%s shape_block_size=%s",
+                    layer_name,
+                    kv_cache_group_id,
+                    _describe_kv_cache_spec(kv_cache_spec),
+                    type(attn_backend).__name__,
+                    describe_value(raw_k_tensor),
+                    describe_value(raw_v_tensor),
+                    sum_page_size_bytes,
+                    sum_page_size_bytes // kv_cache_spec.page_size_bytes,
+                    kv_cache_shape,
+                    shape_block_size,
+                )
                 if not isinstance(kv_cache_spec, MLAAttentionSpec):
                     k_shape = kv_cache_shape[1:]
                     if hasattr(kv_cache_spec, "head_size_v"):
@@ -379,6 +593,25 @@ def _reshape_kv_cache(
                 k_cache = raw_k_tensor.view(k_cache_dtype).view(k_shape)
                 v_cache = raw_v_tensor.view(v_cache_dtype).view(v_shape)
                 kv_caches[layer_name] = (k_cache, v_cache)
+                trace_log(
+                    "kv_cache.reshape.layer",
+                    "layer=%s num_blocks=%s kernel_block_size=%s "
+                    "k_shape=%s v_shape=%s",
+                    layer_name,
+                    num_blocks,
+                    kernel_block_size,
+                    k_shape,
+                    v_shape,
+                )
+                trace_log(
+                    "kv_cache.struct.reshaped_tensor",
+                    "layer=%s k_cache=%s v_cache=%s k_dtype=%s v_dtype=%s",
+                    layer_name,
+                    describe_value(k_cache),
+                    describe_value(v_cache),
+                    k_cache_dtype,
+                    v_cache_dtype,
+                )
             else:
                 raise ValueError("Unknown KV cache spec type.")
 
@@ -386,6 +619,7 @@ def _reshape_kv_cache(
         for layer_name, target_layer_name in shared_kv_cache_layers.items():
             kv_caches[layer_name] = kv_caches[target_layer_name]
 
+    trace_log("kv_cache.reshape.done", "layers=%s", len(kv_caches))
     return kv_caches
 
 
@@ -402,6 +636,33 @@ def _reshape_kv_cache_v2(
     )
 
     kv_caches: dict[str, tuple[torch.Tensor, torch.Tensor]] = {}
+    trace_log(
+        "kv_cache.reshape_v2.start",
+        "attn_groups=%s raw_layers=%s shared_layers=%s is_kv_consumer=%s",
+        len(attn_groups),
+        len(kv_cache_raw_tensors),
+        len(shared_kv_cache_layers),
+        is_kv_consumer,
+    )
+    trace_log(
+        "kv_cache.struct.reshape_v2_inputs",
+        "attn_group_sample=%s raw_layer_sample=%s cache_dtype=%s "
+        "kernel_block_sizes=%s shared_layers=%s",
+        [
+            {
+                "group_id": group.kv_cache_group_id,
+                "layers": group.layer_names[:6],
+                "num_layers": len(group.layer_names),
+                "spec": _describe_kv_cache_spec(group.kv_cache_spec),
+                "backend": type(group.backend).__name__,
+            }
+            for group in attn_groups[:4]
+        ],
+        list(kv_cache_raw_tensors.keys())[:8],
+        cache_dtype,
+        kernel_block_sizes,
+        list(shared_kv_cache_layers.items())[:6],
+    )
     for group in attn_groups:
         if group.kv_cache_group_id >= len(kernel_block_sizes):
             continue
@@ -435,6 +696,22 @@ def _reshape_kv_cache_v2(
                 kv_cache_spec.head_size,
                 cache_dtype,
             )
+            trace_log(
+                "kv_cache.struct.reshape_v2_plan",
+                "layer=%s group=%s spec=%s backend=%s raw_k=%s raw_v=%s "
+                "num_blocks=%s num_blocks_per_kv_block=%s "
+                "kernel_num_blocks=%s kv_cache_shape=%s",
+                layer_name,
+                group.kv_cache_group_id,
+                _describe_kv_cache_spec(kv_cache_spec),
+                type(group.backend).__name__,
+                describe_value(raw_k_tensor),
+                describe_value(raw_v_tensor),
+                num_blocks,
+                num_blocks_per_kv_block,
+                kernel_num_blocks,
+                kv_cache_shape,
+            )
 
             if not isinstance(kv_cache_spec, MLAAttentionSpec):
                 k_shape = kv_cache_shape[1:]
@@ -457,8 +734,29 @@ def _reshape_kv_cache_v2(
             k_cache = raw_k_tensor.view(k_cache_dtype).view(k_shape)
             v_cache = raw_v_tensor.view(v_cache_dtype).view(v_shape)
             kv_caches[layer_name] = (k_cache, v_cache)
+            trace_log(
+                "kv_cache.reshape_v2.layer",
+                "layer=%s group=%s kernel_num_blocks=%s "
+                "kernel_block_size=%s k_shape=%s v_shape=%s",
+                layer_name,
+                group.kv_cache_group_id,
+                kernel_num_blocks,
+                kernel_block_size,
+                k_shape,
+                v_shape,
+            )
+            trace_log(
+                "kv_cache.struct.reshape_v2_tensor",
+                "layer=%s k_cache=%s v_cache=%s k_dtype=%s v_dtype=%s",
+                layer_name,
+                describe_value(k_cache),
+                describe_value(v_cache),
+                k_cache_dtype,
+                v_cache_dtype,
+            )
 
     for layer_name, target_layer_name in shared_kv_cache_layers.items():
         kv_caches[layer_name] = kv_caches[target_layer_name]
 
+    trace_log("kv_cache.reshape_v2.done", "layers=%s", len(kv_caches))
     return kv_caches

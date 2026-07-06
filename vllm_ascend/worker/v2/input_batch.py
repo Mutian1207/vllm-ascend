@@ -26,6 +26,8 @@ from vllm.v1.worker.gpu.input_batch import InputBatch, InputBuffers
 from vllm_ascend.attention.attention_v1 import AscendAttentionState
 from vllm_ascend.ops.rotary_embedding import update_cos_sin
 from vllm_ascend.ops.triton.triton_utils import get_vectorcore_num
+from vllm_ascend.worker.v2.trace import describe_attrs
+from vllm_ascend.worker.v2.trace import log as trace_log
 
 
 class AscendInputBuffers(InputBuffers):
@@ -62,6 +64,31 @@ class AscendInputBuffers(InputBuffers):
         # seq_len_np and seq_lens_cpu share the same memory.
         # define seq_lens_np for easier calculation with numpy.
         self.seq_lens_np: np.ndarray = self.seq_lens_cpu.numpy()
+        trace_log(
+            "input_buffers.init",
+            "max_num_reqs=%s max_num_tokens=%s device=%s "
+            "query_start_loc_shape=%s seq_lens_cpu_shape=%s",
+            max_num_reqs,
+            max_num_tokens,
+            device,
+            tuple(self.query_start_loc.shape),
+            tuple(self.seq_lens_cpu.shape),
+        )
+        trace_log(
+            "input_buffers.struct",
+            "buffers=%s",
+            describe_attrs(
+                self,
+                (
+                    "input_ids",
+                    "positions",
+                    "query_start_loc",
+                    "seq_lens",
+                    "seq_lens_cpu",
+                    "seq_lens_np",
+                ),
+            ),
+        )
 
 
 @dataclass
@@ -103,6 +130,40 @@ class AscendInputBatch(InputBatch):
         input_batch.attn_state = AscendAttentionState.DecodeOnly
         # For mla/sfa, update cos/sin. Here is for _dummy_run.
         update_cos_sin(input_batch.positions)
+        trace_log(
+            "input_batch.make_dummy",
+            "num_reqs=%s num_tokens=%s num_scheduled_tokens=%s "
+            "query_start_loc_np=%s seq_lens_np=%s attn_state=%s",
+            num_reqs,
+            num_tokens,
+            input_batch.num_scheduled_tokens.tolist(),
+            input_batch.query_start_loc_np.tolist(),
+            seq_lens_np.tolist(),
+            input_batch.attn_state,
+        )
+        trace_log(
+            "input_batch.struct.make_dummy",
+            "batch=%s",
+            describe_attrs(
+                input_batch,
+                (
+                    "req_ids",
+                    "num_reqs",
+                    "num_reqs_after_padding",
+                    "num_tokens",
+                    "num_tokens_after_padding",
+                    "num_scheduled_tokens",
+                    "query_start_loc",
+                    "query_start_loc_np",
+                    "seq_lens",
+                    "seq_lens_np",
+                    "input_ids",
+                    "positions",
+                    "logits_indices",
+                    "attn_state",
+                ),
+            ),
+        )
         return cls(**asdict(input_batch), seq_lens_np=seq_lens_np)
 
 

@@ -27,6 +27,8 @@ from vllm.v1.worker.utils import AttentionGroup
 
 from vllm_ascend.worker.v2.attn_utils import build_attn_metadata
 from vllm_ascend.worker.v2.input_batch import AscendInputBatch
+from vllm_ascend.worker.v2.trace import describe_attrs
+from vllm_ascend.worker.v2.trace import log as trace_log
 
 
 class AscendModelState(DefaultModelState):
@@ -51,6 +53,27 @@ class AscendModelState(DefaultModelState):
             # For piecewise cudagraphs and eager, use unpadded sizes.
             num_reqs = input_batch.num_reqs
             num_tokens = input_batch.num_tokens
+        trace_log(
+            "model_state.prepare_attn.start",
+            "cudagraph_mode=%s for_capture=%s num_reqs=%s num_tokens=%s "
+            "attn_state=%s",
+            cudagraph_mode,
+            for_capture,
+            num_reqs,
+            num_tokens,
+            input_batch.attn_state,
+        )
+        trace_log(
+            "flow.forward.attn",
+            "before model forward, build Ascend attention metadata from the "
+            "prepared input batch: req_ids=%s num_reqs=%s tokens=%s "
+            "attention_state=%s graph_mode=%s",
+            input_batch.req_ids,
+            num_reqs,
+            num_tokens,
+            input_batch.attn_state,
+            cudagraph_mode,
+        )
         query_start_loc_cpu = torch.from_numpy(input_batch.query_start_loc_np)
         max_query_len = input_batch.num_scheduled_tokens.max().item()
         # attn_metadata is needed when update_full_graph_params, but no way can get it now.
@@ -73,5 +96,37 @@ class AscendModelState(DefaultModelState):
             positions=input_batch.positions,
             attn_state=input_batch.attn_state,
             for_cudagraph_capture=for_capture,
+        )
+        trace_log(
+            "model_state.prepare_attn.done",
+            "metadata_layers=%s max_query_len=%s query_start_loc_np=%s",
+            list(self.attn_metadata.keys())[:8],
+            max_query_len,
+            input_batch.query_start_loc_np.tolist(),
+        )
+        trace_log(
+            "attn_metadata.struct.result",
+            "metadata_map=%s input_batch=%s",
+            {
+                layer: type(metadata).__name__
+                for layer, metadata in list(self.attn_metadata.items())[:8]
+            },
+            describe_attrs(
+                input_batch,
+                (
+                    "req_ids",
+                    "query_start_loc_np",
+                    "seq_lens_np",
+                    "seq_lens",
+                    "positions",
+                    "attn_state",
+                ),
+            ),
+        )
+        trace_log(
+            "flow.forward.attn_ready",
+            "attention metadata is ready; model forward can consume %s "
+            "metadata layer entries",
+            len(self.attn_metadata),
         )
         return self.attn_metadata

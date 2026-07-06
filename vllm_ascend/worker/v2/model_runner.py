@@ -52,6 +52,8 @@ from vllm_ascend.worker.v2.input_batch import AscendInputBatch, AscendInputBuffe
 from vllm_ascend.worker.v2.spec_decode.eagle import init_speculator
 from vllm_ascend.worker.v2.spec_decode.eagle.speculator import AscendEagleSpeculator
 from vllm_ascend.worker.v2.states import AscendRequestState
+from vllm_ascend.worker.v2.trace import describe_attrs
+from vllm_ascend.worker.v2.trace import log as trace_log
 from vllm_ascend.worker.v2.utils import torch_cuda_wrapper
 
 
@@ -61,18 +63,41 @@ class NPUModelRunner(GPUModelRunner):
     def __init__(self, vllm_config: VllmConfig, device: torch.device):
         # Ascend-specific configurations
         self.ascend_config = get_ascend_config()
+        trace_log(
+            "runner.init.start",
+            "device=%s model=%s",
+            device,
+            getattr(vllm_config.model_config, "model", None),
+        )
         # The following features are not yet supported in Ascend NPU model runner v2:
         # - Context parallelism (prefill or decode)
         # - Dynamic EPLB
         parallel_config = vllm_config.parallel_config
         if parallel_config.prefill_context_parallel_size > 1 or parallel_config.decode_context_parallel_size > 1:
+            trace_log(
+                "runner.init.unsupported",
+                "context_parallel prefill=%s decode=%s",
+                parallel_config.prefill_context_parallel_size,
+                parallel_config.decode_context_parallel_size,
+            )
             raise NotImplementedError("Context parallelism is not supported by Ascend NPU model runner v2.")
 
         if self.ascend_config.eplb_config.dynamic_eplb:
+            trace_log("runner.init.unsupported", "dynamic_eplb=True")
             raise NotImplementedError("dynamic_eplb is not supported by Ascend NPU model runner v2.")
 
         with torch_cuda_wrapper():
             super().__init__(vllm_config, device)
+        trace_log(
+            "runner.init.super",
+            "max_num_reqs=%s max_num_tokens=%s max_model_len=%s "
+            "decode_query_len=%s speculative=%s",
+            self.max_num_reqs,
+            self.max_num_tokens,
+            self.max_model_len,
+            getattr(self, "decode_query_len", None),
+            self.speculative_config is not None,
+        )
 
         # because we will override these attribute, delete these attribute to
         # make sure it's collected by python gc immediately.
@@ -86,6 +111,12 @@ class NPUModelRunner(GPUModelRunner):
         self.speculator: AscendEagleSpeculator | None = None
         if self.speculative_config is not None:
             self.speculator = init_speculator(self.vllm_config, self.device)
+        trace_log(
+            "runner.init.speculator",
+            "speculative=%s speculator_type=%s",
+            self.speculative_config is not None,
+            type(self.speculator).__name__ if self.speculator is not None else None,
+        )
 
         # AscendRequestState has extra `num_computed_tokens_cpu` attribute.
         # so reinitialize req_states here.
@@ -139,10 +170,72 @@ class NPUModelRunner(GPUModelRunner):
         # we need to use input_batch to set forward_context in run_fullgraph.
         # so we can inherit `execute_model` method.
         self.input_batch: AscendInputBatch | None = None
+        trace_log(
+            "runner.init.done",
+            "req_states=%s input_buffers=%s has_full_cudagraphs=%s",
+            type(self.req_states).__name__,
+            type(self.input_buffers).__name__,
+            self.compilation_config.cudagraph_mode.has_full_cudagraphs(),
+        )
+        trace_log(
+            "runner.struct",
+            "runner=%s",
+            {
+                "max_num_reqs": self.max_num_reqs,
+                "max_num_tokens": self.max_num_tokens,
+                "max_model_len": self.max_model_len,
+                "decode_query_len": getattr(self, "decode_query_len", None),
+                "dtype": str(getattr(self, "dtype", None)),
+                "device": str(self.device),
+                "cudagraph_mode": self.compilation_config.cudagraph_mode,
+                "speculative_config": type(self.speculative_config).__name__
+                if self.speculative_config is not None
+                else None,
+                "req_states": type(self.req_states).__name__,
+                "input_buffers": type(self.input_buffers).__name__,
+            },
+        )
 
     def initialize_kv_cache(self, kv_cache_config: KVCacheConfig) -> None:
+        trace_log(
+            "kv_cache.init.start",
+            "num_blocks=%s num_groups=%s",
+            getattr(kv_cache_config, "num_blocks", None),
+            len(getattr(kv_cache_config, "kv_cache_groups", [])),
+        )
+        trace_log(
+            "kv_cache.struct.init_config",
+            "num_blocks=%s groups=%s tensor_defs=%s",
+            getattr(kv_cache_config, "num_blocks", None),
+            [
+                {
+                    "group_id": i,
+                    "layers": group.layer_names[:6],
+                    "num_layers": len(group.layer_names),
+                    "spec_type": type(group.kv_cache_spec).__name__,
+                    "block_size": getattr(group.kv_cache_spec, "block_size", None),
+                    "page_size_bytes": getattr(group.kv_cache_spec, "page_size_bytes", None),
+                }
+                for i, group in enumerate(getattr(kv_cache_config, "kv_cache_groups", [])[:4])
+            ],
+            [
+                {
+                    "tensor_id": i,
+                    "size": getattr(tensor, "size", None),
+                    "shared_by": getattr(tensor, "shared_by", [])[:6],
+                }
+                for i, tensor in enumerate(getattr(kv_cache_config, "kv_cache_tensors", [])[:4])
+            ],
+        )
         with graph_manager_wrapper(self):
             super().initialize_kv_cache(kv_cache_config)
+        trace_log(
+            "kv_cache.init.done",
+            "cudagraph_manager=%s block_tables=%s kv_caches=%s",
+            type(getattr(self, "cudagraph_manager", None)).__name__,
+            type(getattr(self, "block_tables", None)).__name__,
+            len(getattr(self, "kv_caches", [])),
+        )
 
     @torch.inference_mode()
     def profile_run(self) -> None:
@@ -152,6 +245,12 @@ class NPUModelRunner(GPUModelRunner):
         override_mrv2_in_profile_run to True to force moe load to be balanced when executing `profile_run`
         """
         mc2_tokens_capacity = get_mc2_tokens_capacity()
+        trace_log(
+            "profile_run.start",
+            "mc2_tokens_capacity=%s max_num_tokens=%s",
+            mc2_tokens_capacity,
+            self.max_num_tokens,
+        )
         with override_mrv2_in_profile_run(True):
             if (
                 mc2_tokens_capacity is not None
@@ -159,8 +258,10 @@ class NPUModelRunner(GPUModelRunner):
                 and select_moe_comm_method(mc2_tokens_capacity, self.vllm_config)
                 in {MoECommType.MC2, MoECommType.FUSED_MC2}
             ):
+                trace_log("profile_run.mc2_dummy", "dummy_tokens=%s", mc2_tokens_capacity)
                 self._dummy_run(mc2_tokens_capacity, skip_attn=True, is_profile=True)
             super().profile_run()
+        trace_log("profile_run.done", "completed")
 
     def prepare_inputs(
         self,
@@ -176,10 +277,38 @@ class NPUModelRunner(GPUModelRunner):
         assert num_tokens > 0
         num_tokens_per_req = scheduler_output.num_scheduled_tokens
         num_reqs = len(num_tokens_per_req)
+        trace_log(
+            "prepare_inputs.start",
+            "num_reqs=%s num_tokens=%s padded_tokens=%s cg_mode=%s "
+            "batch_desc_num_reqs=%s spec_reqs=%s",
+            num_reqs,
+            num_tokens,
+            num_tokens_after_padding,
+            batch_desc.cg_mode,
+            batch_desc.num_reqs,
+            list(scheduler_output.scheduled_spec_decode_tokens.keys()),
+        )
 
         # Decode first, then prefill.
         # batch_idx -> req_id
         req_ids = sorted(num_tokens_per_req, key=num_tokens_per_req.get)  # type: ignore
+        trace_log(
+            "prepare_inputs.order",
+            "req_ids=%s num_tokens_per_req=%s",
+            req_ids,
+            [num_tokens_per_req[req_id] for req_id in req_ids],
+        )
+        trace_log(
+            "flow.scheduler.round",
+            "scheduler selected %s request(s) for this model step: "
+            "req_ids=%s scheduled_tokens_per_req=%s total_scheduled_tokens=%s "
+            "padded_tokens=%s",
+            num_reqs,
+            req_ids,
+            [num_tokens_per_req[req_id] for req_id in req_ids],
+            num_tokens,
+            num_tokens_after_padding,
+        )
 
         self._update_seq_lens_cpu(scheduler_output, req_ids)
 
@@ -205,6 +334,16 @@ class NPUModelRunner(GPUModelRunner):
         idx_mapping_np = np.fromiter(idx_mapping_iter, dtype=np.int32, count=num_reqs)
         idx_mapping_cpu = torch.from_numpy(idx_mapping_np)
         idx_mapping = async_copy_to_gpu(idx_mapping_cpu, device=self.device)
+        trace_log(
+            "prepare_inputs.mapping",
+            "idx_mapping_np=%s seq_lens_np=%s num_scheduled_tokens=%s "
+            "num_valid_tokens=%s attn_state=%s",
+            idx_mapping_np.tolist(),
+            self.input_buffers.seq_lens_np[:num_reqs].tolist(),
+            num_scheduled_tokens.tolist(),
+            num_valid_tokens.tolist(),
+            attn_state,
+        )
 
         # Get the number of draft tokens for each request.
         draft_tokens = scheduler_output.scheduled_spec_decode_tokens
@@ -217,6 +356,12 @@ class NPUModelRunner(GPUModelRunner):
             cu_num_logits = torch.arange(num_reqs + 1, device=self.device, dtype=torch.int32)
             expanded_idx_mapping = idx_mapping
             expanded_local_pos = torch.zeros(num_reqs, dtype=torch.int32, device=self.device)
+            trace_log(
+                "prepare_inputs.spec_decode",
+                "draft_tokens=False total_num_logits=%s cu_num_logits_np=%s",
+                total_num_logits,
+                cu_num_logits_np.tolist(),
+            )
         else:
             num_draft_tokens_arr = np.array(
                 [len(draft_tokens.get(req_id, ())) for req_id in req_ids],
@@ -235,6 +380,15 @@ class NPUModelRunner(GPUModelRunner):
             max_expand_len = self.num_speculative_steps + 1
             expanded_idx_mapping, expanded_local_pos = expand_idx_mapping(
                 idx_mapping, total_num_logits, cu_num_logits, max_expand_len
+            )
+            trace_log(
+                "prepare_inputs.spec_decode",
+                "draft_tokens=True num_draft_tokens_per_req=%s "
+                "total_num_draft_tokens=%s total_num_logits=%s cu_num_logits_np=%s",
+                num_draft_tokens_per_req.tolist(),
+                total_num_draft_tokens,
+                total_num_logits,
+                cu_num_logits_np.tolist(),
             )
 
         # Get query_start_loc.
@@ -258,6 +412,12 @@ class NPUModelRunner(GPUModelRunner):
                 batch_desc.cg_mode,
                 batch_desc.num_reqs,
             )
+        trace_log(
+            "prepare_inputs.query_start",
+            "num_reqs_padded=%s query_start_loc_np=%s",
+            num_reqs_padded,
+            query_start_loc_np[: num_reqs_padded + 1].tolist(),
+        )
 
         async_copy_to_gpu(query_start_loc_np, out=self.input_buffers.query_start_loc)
 
@@ -266,6 +426,25 @@ class NPUModelRunner(GPUModelRunner):
         prefill_len_np = self.req_states.prefill_len.np[idx_mapping_np]
         num_computed_prefill_tokens_np = self.req_states.num_computed_prefill_tokens[idx_mapping_np]
         is_prefilling_np = num_computed_prefill_tokens_np < prefill_len_np
+        num_prefill_reqs = int(np.count_nonzero(is_prefilling_np))
+        num_decode_reqs = num_reqs - num_prefill_reqs
+        trace_log(
+            "prepare_inputs.prefill",
+            "prefill_len_np=%s num_computed_prefill_tokens_np=%s "
+            "is_prefilling=%s",
+            prefill_len_np.tolist(),
+            num_computed_prefill_tokens_np.tolist(),
+            is_prefilling_np.tolist(),
+        )
+        trace_log(
+            "flow.batch.mode",
+            "this step is prepared as attention_state=%s: "
+            "prefill_requests=%s decode_requests=%s draft_token_requests=%s",
+            attn_state,
+            num_prefill_reqs,
+            num_decode_reqs,
+            len(scheduler_output.scheduled_spec_decode_tokens),
+        )
 
         # Get prefill tokens if any.
         if np.any(is_prefilling_np):
@@ -360,6 +539,66 @@ class NPUModelRunner(GPUModelRunner):
 
         # For mla/sfa, update cos/sin. Here is for execute_model.
         update_cos_sin(self.input_batch.positions)
+        trace_log(
+            "prepare_inputs.done",
+            "input_batch num_reqs=%s num_reqs_after_padding=%s num_tokens=%s "
+            "num_tokens_after_padding=%s seq_lens_cpu_upper_bound=%s "
+            "num_computed_tokens_np=%s logits_indices_shape=%s",
+            self.input_batch.num_reqs,
+            self.input_batch.num_reqs_after_padding,
+            self.input_batch.num_tokens,
+            self.input_batch.num_tokens_after_padding,
+            seq_lens_cpu_upper_bound_np.tolist(),
+            num_computed_tokens_np.tolist(),
+            tuple(logits_indices.shape),
+        )
+        trace_log(
+            "input_batch.struct.ready",
+            "batch=%s",
+            describe_attrs(
+                self.input_batch,
+                (
+                    "req_ids",
+                    "num_reqs",
+                    "num_reqs_after_padding",
+                    "idx_mapping",
+                    "idx_mapping_np",
+                    "expanded_idx_mapping",
+                    "expanded_local_pos",
+                    "num_scheduled_tokens",
+                    "num_tokens",
+                    "num_tokens_after_padding",
+                    "num_draft_tokens",
+                    "num_draft_tokens_per_req",
+                    "query_start_loc",
+                    "query_start_loc_np",
+                    "seq_lens",
+                    "seq_lens_cpu_upper_bound",
+                    "seq_lens_np",
+                    "is_prefilling_np",
+                    "num_computed_tokens_np",
+                    "prefill_len_np",
+                    "num_computed_prefill_tokens_np",
+                    "input_ids",
+                    "positions",
+                    "logits_indices",
+                    "cu_num_logits",
+                    "cu_num_logits_np",
+                    "attn_state",
+                ),
+            ),
+        )
+        trace_log(
+            "flow.batch.ready",
+            "input batch is ready for model forward: req_ids=%s "
+            "actual_tokens=%s padded_tokens=%s query_start_loc=%s "
+            "logits_indices_shape=%s",
+            self.input_batch.req_ids,
+            self.input_batch.num_tokens,
+            self.input_batch.num_tokens_after_padding,
+            self.input_batch.query_start_loc_np.tolist(),
+            tuple(self.input_batch.logits_indices.shape),
+        )
 
         return self.input_batch
 
@@ -381,6 +620,19 @@ class NPUModelRunner(GPUModelRunner):
             num_rejected,
         )
 
+        trace_log(
+            "postprocess",
+            "num_reqs=%s num_sampled_shape=%s num_rejected_shape=%s",
+            getattr(input_batch, "num_reqs", None),
+            tuple(num_sampled.shape) if hasattr(num_sampled, "shape") else None,
+            tuple(num_rejected.shape) if hasattr(num_rejected, "shape") else None,
+        )
+        trace_log(
+            "flow.sample.done",
+            "sampling finished for %s request(s); persistent batch state will "
+            "copy num_computed_tokens back to CPU for the next step",
+            getattr(input_batch, "num_reqs", None),
+        )
         self._copy_num_computed_tokens_to_cpu()
 
     def postprocess_sampled(
@@ -400,6 +652,18 @@ class NPUModelRunner(GPUModelRunner):
             query_start_loc,
         )
 
+        trace_log(
+            "postprocess_sampled",
+            "idx_mapping_shape=%s sampled_tokens_shape=%s query_start_loc=%s",
+            tuple(idx_mapping.shape) if hasattr(idx_mapping, "shape") else None,
+            tuple(sampled_tokens.shape) if hasattr(sampled_tokens, "shape") else None,
+            query_start_loc is not None,
+        )
+        trace_log(
+            "flow.sample.done",
+            "sampling finished through postprocess_sampled; persistent batch "
+            "state will copy num_computed_tokens back to CPU for the next step",
+        )
         self._copy_num_computed_tokens_to_cpu()
 
     def _copy_num_computed_tokens_to_cpu(self):
@@ -415,6 +679,11 @@ class NPUModelRunner(GPUModelRunner):
                 non_blocking=True,
             )
             self.num_computed_tokens_event.record()
+        trace_log(
+            "num_computed.copy_to_cpu",
+            "scheduled async copy shape=%s",
+            tuple(self.num_computed_tokens_cpu.shape),
+        )
 
     def _update_seq_lens_cpu(
         self,
@@ -424,6 +693,12 @@ class NPUModelRunner(GPUModelRunner):
         num_scheduled_tokens = scheduler_output.num_scheduled_tokens
         # wait for num_computed_tokens copy to cpu stream to finish.
         self.num_computed_tokens_event.synchronize()
+        trace_log(
+            "seq_lens_cpu.update.start",
+            "req_ids=%s cached_req_ids=%s",
+            req_ids,
+            scheduler_output.scheduled_cached_reqs.req_ids,
+        )
         for req_id in scheduler_output.scheduled_cached_reqs.req_ids:
             req_index = self.req_states.req_id_to_index[req_id]
             # num_computed_tokens_cpu has reverted by num_rejected_tokens already.
@@ -435,6 +710,11 @@ class NPUModelRunner(GPUModelRunner):
             req_index = self.req_states.req_id_to_index[req_id]
             num_computed_tokens = self.req_states.num_computed_tokens_cpu[req_index]
             self.input_buffers.seq_lens_cpu[i] = num_computed_tokens + num_scheduled_tokens[req_id]
+        trace_log(
+            "seq_lens_cpu.update.done",
+            "seq_lens_cpu=%s",
+            self.input_buffers.seq_lens_np[: len(req_ids)].tolist(),
+        )
 
     def eplb_warmup(self):
         # TODO(Ronald1995): just define the method in case calling error in
@@ -469,6 +749,15 @@ class NPUModelRunner(GPUModelRunner):
             query_start_loc_np[num_reqs + 1 : num_reqs_padded + 1] = (
                 np.arange(1, num_reqs_padded + 1 - num_reqs) * self.decode_query_len + last_loc
             )
+            trace_log(
+                "fia_padding",
+                "uniform num_tokens_padded=%s num_reqs=%s "
+                "num_reqs_padded=%s decode_query_len=%s",
+                num_tokens_padded,
+                num_reqs,
+                num_reqs_padded,
+                self.decode_query_len,
+            )
         else:
             # Mixed-batch case: num_reqs must equal num_reqs_padded
             assert num_reqs == num_reqs_padded
@@ -476,6 +765,13 @@ class NPUModelRunner(GPUModelRunner):
             # Insert a dummy request instead of setting query_start_loc[num_reqs] = num_tokens_padded directly
             query_start_loc_np[num_reqs_padded + 1] = num_tokens_padded
             num_reqs_padded = num_reqs_padded + 1
+            trace_log(
+                "fia_padding",
+                "mixed num_tokens_padded=%s num_reqs=%s new_num_reqs_padded=%s",
+                num_tokens_padded,
+                num_reqs,
+                num_reqs_padded,
+            )
 
         return query_start_loc_np, num_reqs_padded
 
@@ -486,10 +782,18 @@ def graph_manager_wrapper(model_runner):
     original_graph_manager = vllm_model_runner.ModelCudaGraphManager
 
     def factory(vllm_config: VllmConfig, device: torch.device, cudagraph_mode: CUDAGraphMode, decode_query_len: int):
+        trace_log(
+            "graph_wrapper.factory",
+            "creating ModelAclGraphManager cudagraph_mode=%s decode_query_len=%s",
+            cudagraph_mode,
+            decode_query_len,
+        )
         return ModelAclGraphManager(vllm_config, device, cudagraph_mode, decode_query_len, model_runner)
 
     try:
+        trace_log("graph_wrapper.enter", "temporarily replacing ModelCudaGraphManager")
         vllm_model_runner.ModelCudaGraphManager = factory
         yield
     finally:
         vllm_model_runner.ModelCudaGraphManager = original_graph_manager
+        trace_log("graph_wrapper.exit", "restored ModelCudaGraphManager")
