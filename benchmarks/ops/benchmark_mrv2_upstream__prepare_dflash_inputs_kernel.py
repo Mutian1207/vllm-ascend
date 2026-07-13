@@ -4,11 +4,73 @@ from __future__ import annotations
 import argparse
 from types import SimpleNamespace
 
+import numpy as np
 import torch
 
 from mrv2_upstream_bench_utils import bench_npu, init_triton_ascend_device_properties, set_npu_device
+from vllm.triton_utils import triton
+from vllm.v1.attention.backends.utils import PAD_SLOT_ID
 from vllm.v1.worker.gpu.input_batch import InputBuffers
-from vllm.v1.worker.gpu.spec_decode.dflash.speculator import prepare_dflash_inputs
+from vllm.v1.worker.gpu.spec_decode.dflash.speculator import (
+    _prepare_dflash_inputs_kernel,
+)
+
+
+def prepare_dflash_inputs_npu(
+    input_buffers,
+    query_slot_mapping,
+    context_positions,
+    context_slot_mapping,
+    sample_indices,
+    sample_pos,
+    sample_idx_mapping,
+    input_batch,
+    num_sampled,
+    num_rejected,
+    last_sampled,
+    next_prefill_tokens,
+    block_table,
+    block_size,
+    parallel_drafting_token_id,
+    num_query_per_req,
+    num_speculative_steps,
+    max_num_reqs,
+    max_num_tokens,
+) -> None:
+    num_reqs = input_batch.num_reqs
+    max_target_query_len = int(input_batch.num_scheduled_tokens.max())
+    max_tokens_per_req = max_target_query_len + num_query_per_req
+    block_elems = min(256, triton.next_power_of_2(max(16, max_tokens_per_req)))
+    num_blocks = triton.cdiv(max_tokens_per_req, block_elems)
+    _prepare_dflash_inputs_kernel[(num_reqs, num_blocks)](
+        input_buffers.input_ids,
+        input_buffers.positions,
+        input_buffers.query_start_loc,
+        input_buffers.seq_lens,
+        query_slot_mapping,
+        context_positions,
+        context_slot_mapping,
+        sample_indices,
+        sample_pos,
+        sample_idx_mapping,
+        input_batch.positions,
+        input_batch.query_start_loc,
+        input_batch.idx_mapping,
+        last_sampled,
+        next_prefill_tokens,
+        num_sampled,
+        num_rejected,
+        block_table,
+        block_table.stride(0),
+        parallel_drafting_token_id,
+        block_size,
+        num_query_per_req,
+        num_speculative_steps,
+        max_num_reqs,
+        max_num_tokens,
+        PAD_SLOT_ID=PAD_SLOT_ID,
+        BLOCK_SIZE=block_elems,
+    )
 
 
 def main() -> None:
@@ -41,8 +103,7 @@ def main() -> None:
                                        dtype=torch.int32) * context_len
         input_batch = SimpleNamespace(
             num_reqs=num_reqs,
-            num_scheduled_tokens=torch.full((num_reqs,), context_len, device=args.device,
-                                            dtype=torch.int32),
+            num_scheduled_tokens=np.full(num_reqs, context_len, dtype=np.int32),
             positions=target_positions,
             query_start_loc=query_start_loc,
             idx_mapping=torch.arange(num_reqs, device=args.device, dtype=torch.int32),
@@ -53,7 +114,7 @@ def main() -> None:
         next_prefill = torch.randint(0, 32_000, (num_reqs,), device=args.device)
         block_table = torch.arange(num_reqs * 512, device=args.device,
                                    dtype=torch.int32).reshape(num_reqs, 512)
-        fn = lambda: prepare_dflash_inputs(
+        fn = lambda: prepare_dflash_inputs_npu(
             buffers, query_slot_mapping, context_positions, context_slot_mapping,
             sample_indices, sample_pos, sample_idx_mapping, input_batch, num_sampled,
             num_rejected, last_sampled, next_prefill, block_table, 16, 99_999,
@@ -66,4 +127,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
