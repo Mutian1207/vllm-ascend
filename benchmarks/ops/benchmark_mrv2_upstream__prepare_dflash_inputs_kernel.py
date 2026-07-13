@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import torch
 
-from mrv2_upstream_bench_utils import bench_npu, init_triton_ascend_device_properties
+from mrv2_upstream_bench_utils import bench_npu, init_triton_ascend_device_properties, set_npu_device
 from vllm.v1.worker.gpu.input_batch import InputBuffers
 from vllm.v1.worker.gpu.spec_decode.dflash.speculator import prepare_dflash_inputs
 
@@ -17,6 +17,7 @@ def main() -> None:
     parser.add_argument("--warmup", type=int, default=20)
     parser.add_argument("--repeat", type=int, default=100)
     args = parser.parse_args()
+    set_npu_device(args.device)
     init_triton_ascend_device_properties()
 
     for num_reqs, context_len in [(16, 8), (128, 1), (128, 16)]:

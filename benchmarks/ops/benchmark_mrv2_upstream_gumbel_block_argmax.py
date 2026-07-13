@@ -5,9 +5,11 @@ import argparse
 
 import torch
 
-from mrv2_upstream_bench_utils import bench_npu, init_triton_ascend_device_properties
+from mrv2_upstream_bench_utils import bench_npu, init_triton_ascend_device_properties, set_npu_device
 from vllm.triton_utils import tl, triton
-from vllm.v1.worker.gpu.sample.gumbel import gumbel_block_argmax
+from vllm_ascend.worker.v2.spec_decode.rejection_sampler_utils import (
+    _npu_gumbel_block_argmax,
+)
 
 
 @triton.jit
@@ -19,9 +21,9 @@ def _bench_gumbel_block_argmax_kernel(out_idx, out_val, logits_ptr, logits_strid
     mask = block < vocab_size
     logits = tl.load(logits_ptr + token_idx * logits_stride + block,
                      mask=mask, other=float("-inf")).to(tl.float32)
-    value, idx = gumbel_block_argmax(
+    value, idx = _npu_gumbel_block_argmax(
         logits, block, mask, token_idx, idx_mapping, temp, seed, pos, None, 0,
-        None, vocab_size, APPLY_TEMPERATURE=True, USE_FP64=False)
+        None, vocab_size, APPLY_TEMPERATURE=True)
     tl.store(out_idx + token_idx, idx)
     tl.store(out_val + token_idx, value)
 
@@ -32,6 +34,7 @@ def main() -> None:
     parser.add_argument("--warmup", type=int, default=20)
     parser.add_argument("--repeat", type=int, default=100)
     args = parser.parse_args()
+    set_npu_device(args.device)
     init_triton_ascend_device_properties()
 
     for num_tokens, vocab_size in [(128, 1024), (8192, 1024)]:
@@ -52,4 +55,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

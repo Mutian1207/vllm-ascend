@@ -5,7 +5,7 @@ import argparse
 
 import torch
 
-from mrv2_upstream_bench_utils import bench_npu, init_triton_ascend_device_properties
+from mrv2_upstream_bench_utils import bench_npu, init_triton_ascend_device_properties, set_npu_device
 from vllm.triton_utils import triton
 from vllm.v1.worker.gpu.sample.logprob import _fill_logprob_token_ids_kernel
 
@@ -16,6 +16,7 @@ def main() -> None:
     parser.add_argument("--warmup", type=int, default=20)
     parser.add_argument("--repeat", type=int, default=100)
     args = parser.parse_args()
+    set_npu_device(args.device)
     init_triton_ascend_device_properties()
 
     for batch_size, num_topk, num_cols in [(32, 5, 5), (512, 5, 8)]:

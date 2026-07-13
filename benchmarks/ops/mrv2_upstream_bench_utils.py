@@ -31,6 +31,14 @@ def init_triton_ascend_device_properties() -> None:
     module.init_device_properties_triton()
 
 
+def set_npu_device(device: str | torch.device) -> torch.device:
+    device = torch.device(device)
+    if device.type != "npu":
+        raise ValueError(f"Expected an NPU device, got {device}")
+    torch.npu.set_device(device)
+    return device
+
+
 def bench_npu(fn: Callable[[], T], warmup: int, repeat: int) -> tuple[float, T | None]:
     out = None
     for _ in range(warmup):
