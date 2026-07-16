@@ -19,7 +19,10 @@ from collections.abc import Callable
 import torch
 from vllm.distributed import get_dp_group, get_ep_group, get_tp_group
 from vllm.model_executor.layers.fused_moe.config import FusedMoEConfig
-from vllm.model_executor.layers.fused_moe.layer import FusedMoE, UnquantizedFusedMoEMethod
+try:
+    from vllm.model_executor.layers.fused_moe import FusedMoE, UnquantizedFusedMoEMethod
+except ImportError:
+    from vllm.model_executor.layers.fused_moe.layer import FusedMoE, UnquantizedFusedMoEMethod
 
 from vllm_ascend.ascend_forward_context import _EXTRA_CTX, MoECommType
 from vllm_ascend.ops.fused_moe.experts_selector import zero_experts_compute
@@ -34,6 +37,8 @@ from vllm_ascend.utils import maybe_trans_nz
 
 from .experts_selector import select_experts
 from .moe_comm_method import AllGatherCommImpl310
+
+_FusedMoEBase = FusedMoE if isinstance(FusedMoE, type) else torch.nn.Module
 
 
 class AscendUnquantizedFusedMoEMethod310(UnquantizedFusedMoEMethod):
@@ -126,7 +131,7 @@ class AscendUnquantizedFusedMoEMethod310(UnquantizedFusedMoEMethod):
         return final_hidden_states
 
 
-class AscendFusedMoE310(FusedMoE):
+class AscendFusedMoE310(_FusedMoEBase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 

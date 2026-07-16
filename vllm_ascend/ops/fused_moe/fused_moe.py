@@ -26,7 +26,10 @@ from vllm.distributed import get_dp_group, get_ep_group, get_tp_group, tensor_mo
 from vllm.forward_context import get_forward_context
 from vllm.logger import logger
 from vllm.model_executor.layers.fused_moe.config import FusedMoEConfig
-from vllm.model_executor.layers.fused_moe.layer import FusedMoE, UnquantizedFusedMoEMethod
+try:
+    from vllm.model_executor.layers.fused_moe import FusedMoE, UnquantizedFusedMoEMethod
+except ImportError:
+    from vllm.model_executor.layers.fused_moe.layer import FusedMoE, UnquantizedFusedMoEMethod
 from vllm.model_executor.layers.fused_moe.routed_experts_capturer import RoutedExpertsCapturer
 from vllm.model_executor.layers.fused_moe.runner.moe_runner import MoERunner  # type: ignore
 
@@ -49,6 +52,8 @@ from vllm_ascend.utils import (
     shared_experts_calculation_stream,
     vllm_version_is,
 )
+
+_FusedMoEBase = FusedMoE if isinstance(FusedMoE, type) else torch.nn.Module
 
 if vllm_version_is("0.20.2"):
     from vllm.model_executor.layers.fused_moe.layer import get_compressed_expert_map
@@ -331,7 +336,7 @@ class AscendMoERunner(MoERunner):
             )
 
 
-class AscendFusedMoE(FusedMoE):
+class AscendFusedMoE(_FusedMoEBase):
     moe_counter = -1
     gate_stream: torch.npu.Stream | None = None
 

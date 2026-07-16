@@ -25,7 +25,7 @@ import zmq
 from mooncake.engine import TransferEngine  # type: ignore
 from vllm import envs
 from vllm.config import VllmConfig
-from vllm.distributed import get_pcp_group
+from vllm.distributed import get_dcp_group, get_pcp_group
 from vllm.distributed.kv_transfer.kv_connector.utils import BlockIds
 from vllm.distributed.kv_transfer.kv_connector.v1.base import (
     KVConnectorBase_V1,
@@ -35,13 +35,23 @@ from vllm.distributed.kv_transfer.kv_connector.v1.base import (
     SupportsHMA,
 )
 from vllm.distributed.parallel_state import (
-    get_decode_context_model_parallel_rank,
-    get_decode_context_model_parallel_world_size,
     get_pp_group,
     get_tensor_model_parallel_rank,
     get_tensor_model_parallel_world_size,
     get_tp_group,
 )
+try:
+    from vllm.distributed.parallel_state import (
+        get_decode_context_model_parallel_rank,
+        get_decode_context_model_parallel_world_size,
+    )
+except ImportError:
+
+    def get_decode_context_model_parallel_rank() -> int:
+        return get_dcp_group().rank_in_group
+
+    def get_decode_context_model_parallel_world_size() -> int:
+        return get_dcp_group().world_size
 from vllm.distributed.utils import get_pp_indices
 from vllm.logger import logger
 from vllm.utils.network_utils import get_ip, make_zmq_path, make_zmq_socket
