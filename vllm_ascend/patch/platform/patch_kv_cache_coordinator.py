@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM projectx
 import sys
 from collections.abc import Mapping
+from inspect import signature
 from math import lcm
 
 import vllm
@@ -36,6 +37,7 @@ from vllm_ascend.utils import vllm_version_is
 USE_MULTI_GROUPS_KV_CACHE = True
 
 _orig_get_kv_cache_coordinator = vllm.v1.core.kv_cache_coordinator.get_kv_cache_coordinator
+_ORIG_GET_KV_CACHE_COORDINATOR_PARAMS = set(signature(_orig_get_kv_cache_coordinator).parameters)
 
 
 def _select_kv_token_budget(
@@ -45,6 +47,22 @@ def _select_kv_token_budget(
 ) -> int:
     token_budget = max_num_batched_tokens if vllm_version_is("0.24.0") else max_in_flight_tokens
     return token_budget if token_budget is not None else max_model_len
+
+
+def _call_orig_get_kv_cache_coordinator(orig_kwargs: dict):
+    if "max_num_batched_tokens" in _ORIG_GET_KV_CACHE_COORDINATOR_PARAMS:
+        orig_kwargs["max_num_batched_tokens"] = orig_kwargs.pop("_token_budget")
+    elif "max_in_flight_tokens" in _ORIG_GET_KV_CACHE_COORDINATOR_PARAMS:
+        orig_kwargs["max_in_flight_tokens"] = orig_kwargs.pop("_token_budget")
+    else:
+        orig_kwargs.pop("_token_budget")
+    return _orig_get_kv_cache_coordinator(
+        **{
+            key: value
+            for key, value in orig_kwargs.items()
+            if key in _ORIG_GET_KV_CACHE_COORDINATOR_PARAMS
+        }
+    )
 
 
 def _is_deepseek_v4_kv_cache_spec(kv_cache_spec: KVCacheSpec) -> bool:
@@ -509,13 +527,10 @@ def get_kv_cache_coordinator(
             pcp_world_size=pcp_world_size,
             hash_block_size=hash_block_size,
             metrics_collector=metrics_collector,
+            _token_budget=token_budget,
         )
-        if vllm_version_is("0.24.0"):
-            orig_kwargs["max_num_batched_tokens"] = token_budget
-        else:
-            orig_kwargs["max_in_flight_tokens"] = token_budget
         orig_kwargs["scheduler_block_size"] = scheduler_block_size
-        return _orig_get_kv_cache_coordinator(**orig_kwargs)
+        return _call_orig_get_kv_cache_coordinator(orig_kwargs)
 
     return AscendHybridKVCacheCoordinator(
         kv_cache_config,

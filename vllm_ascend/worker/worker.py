@@ -159,12 +159,12 @@ class NPUWorker(WorkerBase):
             WEIGHT_LOADER_V2_SUPPORTED.remove("UnquantizedLinearMethod")
 
         self.use_v2_model_runner = self.vllm_config.use_v2_model_runner
-        if self.use_v2_model_runner and vllm_version_is("0.24.0"):
+        if self.use_v2_model_runner and vllm_version_is("0.23.0"):
             logger.warning(
                 "VLLM_USE_V2_MODEL_RUNNER is supported only on the verified vLLM main commit; "
                 "falling back to the v1 model runner."
             )
-            self.use_v2_model_runner = False
+            self.use_v2_model_runner = false
         self._pp_send_work: list[Handle] = []
 
         ascend_compilation_config = get_ascend_config().ascend_compilation_config
