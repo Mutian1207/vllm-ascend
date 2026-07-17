@@ -15,6 +15,7 @@
 # limitations under the License.
 
 import os
+from importlib.util import find_spec
 
 import vllm_ascend.patch.platform.patch_camem_allocator  # noqa
 import vllm_ascend.patch.platform.patch_distributed  # noqa
@@ -38,7 +39,8 @@ if vllm_version_is("0.23.0"):
     import vllm_ascend.patch.platform.patch_minimax_m2_tool_call_parser  # noqa
     import vllm_ascend.patch.platform.patch_minimax_usage_accounting  # noqa
 
-if vllm_version_is("0.24.0"):
+if (vllm_version_is("0.24.0")
+        and find_spec("vllm.tool_parsers.deepseekv4_tool_parser") is not None):
     import vllm_ascend.patch.platform.patch_deepseek_v4_tool_call_parser  # noqa
 import vllm_ascend.patch.platform.patch_structured_output  # noqa
 import vllm_ascend.patch.platform.patch_weight_transfer_engine  # noqa

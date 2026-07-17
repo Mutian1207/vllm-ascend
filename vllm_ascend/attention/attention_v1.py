@@ -109,6 +109,13 @@ class AscendAttentionBackend(AttentionBackend):
     ) -> tuple[int, ...]:
         return (2, num_blocks, block_size, num_kv_heads, head_size)
 
+    @classmethod
+    def indexes_kv_by_block_stride(cls) -> bool:
+        # vLLM's logical shape keeps the K/V axis first, but Ascend v2 splits
+        # that tensor into separate K and V buffers before reshaping. Each
+        # split buffer is blocks-first, so it can tolerate padded KV pages.
+        return envs_vllm.VLLM_USE_V2_MODEL_RUNNER
+
     @staticmethod
     def swap_blocks(
         src_kv_cache: list[torch.Tensor],
