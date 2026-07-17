@@ -1697,8 +1697,9 @@ at::Tensor npu_gumbel_sample_meta(
     (void)apply_temperature;
     (void)output_processed_logits;
     (void)output_processed_logits_col;
-    int64_t num_tokens = logits.size(0);
-    return at::empty({num_tokens}, logits.options().dtype(at::kLong));
+    auto num_tokens = logits.sym_size(0);
+    c10::SymDimVector output_shape = {num_tokens};
+    return at::empty_symint(output_shape, logits.options().dtype(at::kLong));
 }
 
 } // namespace meta
