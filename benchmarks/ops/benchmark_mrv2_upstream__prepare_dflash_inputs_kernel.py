@@ -8,7 +8,16 @@ import torch
 
 from mrv2_upstream_bench_utils import bench_npu, init_triton_ascend_device_properties, set_npu_device
 from vllm.v1.worker.gpu.input_batch import InputBuffers
-from vllm.v1.worker.gpu.spec_decode.dflash.speculator import prepare_dflash_inputs
+from vllm.v1.worker.gpu.spec_decode.dflash import speculator as dflash_speculator
+from vllm_ascend.worker.v2.spec_decode.dflash.speculator import (
+    _prepare_dflash_inputs_kernel_ascend,
+)
+
+
+# This standalone benchmark does not load vLLM Ascend's patch_v2 module.
+# Inject the downstream kernel explicitly while retaining the upstream wrapper
+# for its production launch-grid calculation and argument plumbing.
+dflash_speculator._prepare_dflash_inputs_kernel = _prepare_dflash_inputs_kernel_ascend
 
 
 def main() -> None:
@@ -53,14 +62,14 @@ def main() -> None:
         next_prefill = torch.randint(0, 32_000, (num_reqs,), device=args.device)
         block_table = torch.arange(num_reqs * 512, device=args.device,
                                    dtype=torch.int32).reshape(num_reqs, 512)
-        fn = lambda: prepare_dflash_inputs(
+        fn = lambda: dflash_speculator.prepare_dflash_inputs(
             buffers, query_slot_mapping, context_positions, context_slot_mapping,
             sample_indices, sample_pos, sample_idx_mapping, input_batch, num_sampled,
             num_rejected, last_sampled, next_prefill, block_table, 16, 99_999,
             num_query_per_req, num_speculative_steps, num_reqs, max_num_tokens,
             131_072)
         latency_us, _ = bench_npu(fn, args.warmup, args.repeat)
-        print(f"op=_prepare_dflash_inputs_kernel num_reqs={num_reqs} "
+        print(f"op=_prepare_dflash_inputs_kernel_ascend num_reqs={num_reqs} "
               f"context_len={context_len} latency_us={latency_us:.2f} "
               f"checksum={int(buffers.input_ids.sum().item())}")
 
