@@ -81,7 +81,14 @@ static ge::graphStatus GumbelSampleTilingFunc(gert::TilingContext* context) {
     auto processedShapePtr = context->GetOutputShape(1);
     if (processedShapePtr != nullptr) {
         auto processedShape = processedShapePtr->GetStorageShape();
-        if (processedShape.GetDimNum() >= 3) {
+        if (processedShape.GetDimNum() == 2) {
+            int64_t maxReqsI64 = processedShape.GetDim(0);
+            int64_t processedVocabI64 = processedShape.GetDim(1);
+            if (maxReqsI64 > 0 && processedVocabI64 == vocabSizeI64) {
+                hasProcessedLogits = 1;
+                processedLogitsStride = vocabSize;
+            }
+        } else if (processedShape.GetDimNum() == 3) {
             int64_t maxReqsI64 = processedShape.GetDim(0);
             int64_t stepsI64 = processedShape.GetDim(1);
             int64_t processedVocabI64 = processedShape.GetDim(2);

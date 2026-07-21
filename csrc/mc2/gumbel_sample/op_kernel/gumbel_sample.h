@@ -400,8 +400,6 @@ __aicore__ inline void GumbelSampleOp<APPLY_TEMPERATURE>::ProcessOneRow(uint32_t
 
         // ---- CopyIn ----
         LocalTensor<float> logitsLocal = inQueueLogits_.AllocTensor<float>();
-        Duplicate(logitsLocal, GUMBEL_NEG_INF, alignedLen);
-        PipeBarrier<PIPE_V>();
 
         DataCopyExtParams copyParams;
         copyParams.blockCount = 1;
@@ -415,6 +413,23 @@ __aicore__ inline void GumbelSampleOp<APPLY_TEMPERATURE>::ProcessOneRow(uint32_t
                     copyParams, padParams);
         inQueueLogits_.EnQue(logitsLocal);
         logitsLocal = inQueueLogits_.DeQue<float>();
+
+        // Let MTE2 be the sole writer before DeQue. Filling the entire VECIN
+        // buffer first and then overwriting it with MTE2 races across pipelines
+        // under repeated launches. Only initialize the unused tail afterwards.
+        if (curLen < alignedLen) {
+            constexpr uint32_t FLOATS_PER_UB_BLOCK = 32 / sizeof(float);
+            uint32_t alignedStart =
+                ((curLen + FLOATS_PER_UB_BLOCK - 1) / FLOATS_PER_UB_BLOCK) *
+                FLOATS_PER_UB_BLOCK;
+            for (uint32_t i = curLen; i < alignedStart; ++i) {
+                logitsLocal.SetValue(i, GUMBEL_NEG_INF);
+            }
+            if (alignedStart < alignedLen) {
+                Duplicate(logitsLocal[alignedStart], GUMBEL_NEG_INF, alignedLen - alignedStart);
+            }
+            PipeBarrier<PIPE_V>();
+        }
 
         if (!isGreedy) {
             if constexpr (APPLY_TEMPERATURE) {
