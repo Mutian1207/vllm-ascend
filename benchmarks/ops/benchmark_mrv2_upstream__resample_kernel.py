@@ -7,7 +7,7 @@ import torch
 
 from mrv2_upstream_bench_utils import bench_npu, init_triton_ascend_device_properties, set_npu_device
 from vllm.triton_utils import triton
-from vllm_ascend.worker.v2.spec_decode.rejection_sampler_utils import _resample_kernel
+from vllm.v1.worker.gpu.spec_decode.rejection_sampler_utils import _resample_kernel
 
 
 def main() -> None:
@@ -47,6 +47,7 @@ def main() -> None:
             draft_logits.stride(1), draft_lse, rejected_step, cu_num_logits,
             expanded_idx, draft_sampled, temp, seed, pos,
             vocab_size, BLOCK_SIZE=block_size, HAS_DRAFT_LOGITS=True,
+            USE_FP64=False,
         )
         latency_us, _ = bench_npu(fn, args.warmup, args.repeat)
         print(f"op=_resample_kernel num_reqs={num_reqs} steps={steps} "

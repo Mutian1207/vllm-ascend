@@ -10,7 +10,7 @@ from mrv2_upstream_bench_utils import (
     init_triton_ascend_device_properties,
     set_npu_device,
 )
-from vllm_ascend.worker.v2.sample.logprob import compute_token_logprobs
+from vllm.v1.worker.gpu.sample.logprob import compute_token_logprobs
 
 
 def case_topk_log_softmax(device):

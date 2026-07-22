@@ -10,7 +10,7 @@ from mrv2_upstream_bench_utils import (
     init_triton_ascend_device_properties,
     set_npu_device,
 )
-from vllm_ascend.worker.v2.sample.min_p import apply_min_p
+from vllm.v1.worker.gpu.sample.min_p import apply_min_p
 
 
 def case_min_p(device):

@@ -11,7 +11,7 @@ from mrv2_upstream_bench_utils import (
     set_npu_device,
 )
 from vllm.triton_utils import triton
-from vllm_ascend.worker.v2.structured_outputs import _apply_grammar_bitmask_kernel
+from vllm.v1.worker.gpu.structured_outputs import _apply_grammar_bitmask_kernel
 
 
 def case_grammar_bitmask(device):
