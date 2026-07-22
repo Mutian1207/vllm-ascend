@@ -17,8 +17,101 @@
 # limitations under the License.
 # This file is a part of the vllm-ascend project.
 
+import os
+
 import torch
 from vllm.triton_utils import tl, triton
+
+
+_GUMBEL_INPUT_DUMP_COUNT = 0
+
+
+def _cpu_or_none(tensor: torch.Tensor | None) -> torch.Tensor | None:
+    if tensor is None:
+        return None
+    return tensor.detach().cpu()
+
+
+def _dump_gumbel_inputs(
+    logits: torch.Tensor,
+    expanded_idx_mapping: torch.Tensor,
+    temperature: torch.Tensor,
+    seed: torch.Tensor,
+    pos: torch.Tensor,
+    apply_temperature: bool,
+    sampled: torch.Tensor,
+    output_processed_logits: torch.Tensor | None,
+    output_processed_logits_col: torch.Tensor | None,
+) -> None:
+    global _GUMBEL_INPUT_DUMP_COUNT
+
+    dump_dir = os.getenv("VLLM_ASCEND_DUMP_GUMBEL_INPUTS")
+    if not dump_dir:
+        return
+
+    limit = int(os.getenv("VLLM_ASCEND_DUMP_GUMBEL_LIMIT", "20"))
+    if _GUMBEL_INPUT_DUMP_COUNT >= limit:
+        return
+
+    os.makedirs(dump_dir, exist_ok=True)
+    call_idx = _GUMBEL_INPUT_DUMP_COUNT
+    _GUMBEL_INPUT_DUMP_COUNT += 1
+
+    metadata = {
+        "pid": os.getpid(),
+        "call_idx": call_idx,
+        "logits_shape": list(logits.shape),
+        "logits_dtype": str(logits.dtype),
+        "logits_stride": list(logits.stride()),
+        "expanded_idx_mapping_shape": list(expanded_idx_mapping.shape),
+        "expanded_idx_mapping_dtype": str(expanded_idx_mapping.dtype),
+        "temperature_shape": list(temperature.shape),
+        "temperature_dtype": str(temperature.dtype),
+        "seed_shape": list(seed.shape),
+        "seed_dtype": str(seed.dtype),
+        "pos_shape": list(pos.shape),
+        "pos_dtype": str(pos.dtype),
+        "apply_temperature": bool(apply_temperature),
+        "sampled_shape": list(sampled.shape),
+        "sampled_dtype": str(sampled.dtype),
+        "has_output_processed_logits": output_processed_logits is not None,
+        "output_processed_logits_shape": (
+            list(output_processed_logits.shape)
+            if output_processed_logits is not None
+            else None
+        ),
+        "output_processed_logits_dtype": (
+            str(output_processed_logits.dtype)
+            if output_processed_logits is not None
+            else None
+        ),
+        "has_output_processed_logits_col": output_processed_logits_col is not None,
+        "output_processed_logits_col_shape": (
+            list(output_processed_logits_col.shape)
+            if output_processed_logits_col is not None
+            else None
+        ),
+        "output_processed_logits_col_dtype": (
+            str(output_processed_logits_col.dtype)
+            if output_processed_logits_col is not None
+            else None
+        ),
+    }
+
+    case = {
+        "metadata": metadata,
+        "logits": logits.detach().cpu(),
+        "expanded_idx_mapping": expanded_idx_mapping.detach().cpu(),
+        "temperature": temperature.detach().cpu(),
+        "seed": seed.detach().cpu(),
+        "pos": pos.detach().cpu(),
+        "apply_temperature": bool(apply_temperature),
+        "sampled_ascend": sampled.detach().cpu(),
+        "output_processed_logits": _cpu_or_none(output_processed_logits),
+        "output_processed_logits_col": _cpu_or_none(output_processed_logits_col),
+    }
+    filename = f"gumbel_case_pid{os.getpid()}_{call_idx:05d}.pt"
+    torch.save(case, os.path.join(dump_dir, filename))
 
 
 @triton.jit(do_not_specialize=["logits_stride", "vocab_size"])
@@ -174,6 +267,17 @@ def gumbel_sample(
         seed,
         pos,
         apply_temperature,
+        output_processed_logits,
+        output_processed_logits_col,
+    )
+    _dump_gumbel_inputs(
+        logits,
+        expanded_idx_mapping,
+        temperature,
+        seed,
+        pos,
+        apply_temperature,
+        sampled,
         output_processed_logits,
         output_processed_logits_col,
     )
