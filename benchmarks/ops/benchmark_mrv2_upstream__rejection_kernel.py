@@ -7,9 +7,7 @@ import torch
 
 from mrv2_upstream_bench_utils import bench_npu, init_triton_ascend_device_properties, set_npu_device
 from vllm.triton_utils import triton
-from vllm_ascend.worker.v2.spec_decode.rejection_sampler_utils import (
-    _probabilistic_rejection_kernel,
-)
+from vllm.v1.worker.gpu.spec_decode.rejection_sampler_utils import _rejection_kernel
 
 
 def main() -> None:
@@ -26,7 +24,7 @@ def main() -> None:
         num_blocks = triton.cdiv(vocab_size, 8192)
         padded_blocks = triton.next_power_of_2(num_blocks)
         sampled = torch.empty((num_reqs, steps + 1), device=args.device, dtype=torch.int64)
-        num_sampled = torch.empty(num_reqs, device=args.device, dtype=torch.int32)
+        rejected_steps = torch.empty(num_reqs, device=args.device, dtype=torch.int32)
         target_lse = torch.zeros(num_reqs, device=args.device)
         draft_lse = torch.zeros(num_reqs, device=args.device)
         target_logits = torch.randn((num_logits, vocab_size), device=args.device)
@@ -44,19 +42,20 @@ def main() -> None:
         temp = torch.zeros(num_reqs, device=args.device)
         seed = torch.arange(num_reqs, device=args.device, dtype=torch.int64)
         pos = torch.arange(num_logits, device=args.device, dtype=torch.int32)
-        fn = lambda: _probabilistic_rejection_kernel[(num_reqs,)](
-            sampled, sampled.stride(0), num_sampled, target_lse, draft_lse,
+        synthetic_rates = torch.empty(0, device=args.device)
+        fn = lambda: _rejection_kernel[(num_reqs,)](
+            sampled, sampled.stride(0), rejected_steps, target_lse, draft_lse,
             target_logits, target_logits.stride(0), target_argmax,
             target_argmax.stride(0), target_max, target_max.stride(0),
             target_sumexp, target_sumexp.stride(0), draft_sampled, draft_logits,
             draft_logits.stride(0), draft_logits.stride(1), draft_max,
             draft_max.stride(0), draft_sumexp, draft_sumexp.stride(0), cu_num_logits,
-            idx_mapping, temp, seed, pos, num_blocks,
+            idx_mapping, temp, seed, pos, synthetic_rates, num_blocks,
             PADDED_VOCAB_NUM_BLOCKS=padded_blocks, HAS_DRAFT_LOGITS=True,
-            num_warps=1)
+            SYNTHETIC_MODE=False, num_warps=1)
         latency_us, _ = bench_npu(fn, args.warmup, args.repeat)
         print(f"op=_rejection_kernel num_reqs={num_reqs} steps={steps} "
-              f"latency_us={latency_us:.2f} checksum={int(num_sampled.sum().item())}")
+              f"latency_us={latency_us:.2f} checksum={int(rejected_steps.sum().item())}")
 
 
 if __name__ == "__main__":

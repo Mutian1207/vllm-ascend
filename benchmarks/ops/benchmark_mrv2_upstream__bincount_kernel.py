@@ -11,7 +11,7 @@ from mrv2_upstream_bench_utils import (
     set_npu_device,
 )
 from vllm.triton_utils import triton
-from vllm_ascend.worker.v2.sample.penalties import bincount
+from vllm.v1.worker.gpu.sample.penalties import bincount
 
 
 def case_bincount(device):

@@ -58,7 +58,7 @@ def main() -> None:
             sample_indices, sample_pos, sample_idx_mapping, input_batch, num_sampled,
             num_rejected, last_sampled, next_prefill, block_table, 16, 99_999,
             num_query_per_req, num_speculative_steps, num_reqs, max_num_tokens,
-            131_072)
+        )
         latency_us, _ = bench_npu(fn, args.warmup, args.repeat)
         print(f"op=_prepare_dflash_inputs_kernel num_reqs={num_reqs} "
               f"context_len={context_len} latency_us={latency_us:.2f} "

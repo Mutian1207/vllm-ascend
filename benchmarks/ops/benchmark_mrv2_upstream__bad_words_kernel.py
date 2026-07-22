@@ -10,7 +10,7 @@ from mrv2_upstream_bench_utils import (
     init_triton_ascend_device_properties,
     set_npu_device,
 )
-from vllm_ascend.worker.v2.sample.bad_words import apply_bad_words
+from vllm.v1.worker.gpu.sample.bad_words import apply_bad_words
 
 
 def case_bad_words(device):

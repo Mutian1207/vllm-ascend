@@ -10,7 +10,7 @@ from mrv2_upstream_bench_utils import (
     init_triton_ascend_device_properties,
     set_npu_device,
 )
-from vllm_ascend.worker.v2.sample.logprob import _ranks_kernel
+from vllm.v1.worker.gpu.sample.logprob import _ranks_kernel
 
 
 def case_ranks(device):
@@ -18,7 +18,7 @@ def case_ranks(device):
         logits = torch.randn((batch, vocab), device=device)
         token_ids = torch.randint(0, vocab, (batch,), device=device, dtype=torch.int64)
         out = torch.empty(batch, device=device, dtype=torch.int64)
-        yield f"batch_size={batch} vocab_size={vocab}", lambda: _ranks_kernel[(batch,)](out, logits, logits.stride(0), token_ids, vocab, batch, 1, BLOCK_SIZE=8192, multibuffer=False), lambda: int(out.sum().item())
+        yield f"batch_size={batch} vocab_size={vocab}", lambda: _ranks_kernel[(batch,)](out, logits, logits.stride(0), token_ids, vocab, BLOCK_SIZE=8192), lambda: int(out.sum().item())
 
 
 def main() -> None:

@@ -5,10 +5,14 @@ import argparse
 
 import torch
 
-from mrv2_upstream_bench_utils import bench_npu, init_triton_ascend_device_properties, set_npu_device
+from mrv2_upstream_bench_utils import (
+    bench_npu,
+    init_triton_ascend_device_properties,
+    set_npu_device,
+)
 from vllm.triton_utils import tl, triton
 from vllm.v1.worker.gpu.spec_decode.rejection_sampler_utils import (
-    _compute_max_and_sumexp,
+    _compute_block_max_and_sumexp,
 )
 
 
@@ -19,8 +23,10 @@ def _bench_kernel(out_max, out_sumexp, logits, stride, vocab_size,
     block_id = tl.program_id(1)
     block = block_id * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     mask = block < vocab_size
-    x = tl.load(logits + row * stride + block, mask=mask, other=float("-inf")).to(tl.float32)
-    m, s = _compute_max_and_sumexp(x)
+    x = tl.load(logits + row * stride + block,
+                mask=mask,
+                other=float("-inf")).to(tl.float32)
+    m, s = _compute_block_max_and_sumexp(x)
     tl.store(out_max + row * tl.num_programs(1) + block_id, m)
     tl.store(out_sumexp + row * tl.num_programs(1) + block_id, s)
 
@@ -45,7 +51,7 @@ def main() -> None:
             BLOCK_SIZE=block_size)
         latency_us, _ = bench_npu(fn, args.warmup, args.repeat)
         checksum = float(out_max.sum().item()) + float(out_sumexp.sum().item())
-        print(f"op=_compute_max_and_sumexp num_logits={num_logits} "
+        print(f"op=_compute_block_max_and_sumexp num_logits={num_logits} "
               f"vocab_size={vocab_size} latency_us={latency_us:.2f} "
               f"checksum={checksum:.3f}")
 
