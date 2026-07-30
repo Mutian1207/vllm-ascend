@@ -348,13 +348,10 @@ class NPUModelRunner(GPUModelRunner):
             max_seq_len_np=max_seq_len_np,
             input_ids=input_ids,
             positions=positions,
-            is_padding=self.input_buffers.is_padding[:num_tokens_after_padding],
             logits_indices=logits_indices,
             cu_num_logits=cu_num_logits,
             cu_num_logits_np=cu_num_logits_np,
             has_structured_output_reqs=scheduler_output.has_structured_output_requests,
-            # TODO: only populated for R-SWA (not supported yet).
-            prompt_lens=None,
             # extra attributes for ascend npus.
             seq_lens_np=self.input_buffers.seq_lens_np,
             attn_state=attn_state,
@@ -508,3 +505,4 @@ def graph_manager_wrapper(model_runner):
         yield
     finally:
         vllm_model_runner.ModelCudaGraphManager = original_graph_manager
+

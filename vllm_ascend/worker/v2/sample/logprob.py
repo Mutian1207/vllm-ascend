@@ -120,18 +120,56 @@ def compute_topk_logprobs(
     num_logprobs: int,
     sampled_token_ids: torch.Tensor,
     cu_num_logits: list[int] | None = None,
+    logprob_token_ids_state: object | None = None,
+    expanded_idx_mapping: torch.Tensor | None = None,
+    max_per_req_token_ids: int = 0,
 ) -> LogprobsTensors:
     assert num_logprobs >= 0
     batch_size, vocab_size = logits.shape
-    logprob_token_ids = sampled_token_ids.unsqueeze(-1)
-    if num_logprobs > 0:
-        topk_indices = torch.topk(logits, num_logprobs, dim=-1).indices
-        logprob_token_ids = torch.cat((sampled_token_ids.unsqueeze(-1), topk_indices), dim=1)
+    if max_per_req_token_ids == 0:
+        logprob_token_ids = sampled_token_ids.unsqueeze(-1)
+        if num_logprobs > 0:
+            topk_indices = torch.topk(logits, num_logprobs, dim=-1).indices
+            logprob_token_ids = torch.cat(
+                (sampled_token_ids.unsqueeze(-1), topk_indices), dim=1
+            )
+        valid_mask = None
+    else:
+        assert logprob_token_ids_state is not None
+        assert expanded_idx_mapping is not None
+
+        num_cols = max(num_logprobs, max_per_req_token_ids)
+        logprob_token_ids = sampled_token_ids.new_zeros((batch_size, 1 + num_cols))
+        valid_mask = torch.zeros_like(logprob_token_ids, dtype=torch.bool)
+        logprob_token_ids[:, 0] = sampled_token_ids
+        valid_mask[:, 0] = True
+
+        request_indices = expanded_idx_mapping.to(torch.long)
+        num_token_ids = logprob_token_ids_state.num_token_ids.gpu[request_indices]
+        has_custom_token_ids = num_token_ids > 0
+
+        if num_logprobs > 0:
+            topk_indices = torch.topk(logits, num_logprobs, dim=-1).indices
+            logprob_token_ids[:, 1 : 1 + num_logprobs] = topk_indices
+            valid_mask[:, 1 : 1 + num_logprobs] = True
+
+        # A request with custom token ids replaces its top-k entries. This is
+        # the same layout as upstream's _fill_logprob_token_ids_kernel.
+        valid_mask[has_custom_token_ids, 1:] = False
+        custom_token_ids = logprob_token_ids_state.token_ids.gpu
+        for column in range(max_per_req_token_ids):
+            column_mask = num_token_ids > column
+            logprob_token_ids[column_mask, column + 1] = custom_token_ids[
+                request_indices[column_mask], column
+            ]
+            valid_mask[column_mask, column + 1] = True
 
     # NOTE(woosuk): Here, to save GPU memory, we do not materialize the full
     # logprobs tensor. Instead, we only compute and return the logprobs of
     # the topk + 1 tokens.
     logprobs = compute_token_logprobs(logits, logprob_token_ids)
+    if valid_mask is not None:
+        logprobs = logprobs.masked_fill(~valid_mask, float("-inf"))
     token_ranks = torch.empty(
         batch_size,
         dtype=torch.int64,
@@ -162,3 +200,4 @@ def compute_topk_logprobs(
         selected_token_ranks=token_ranks,
         cu_num_generated_tokens=cu_num_logits,
     )
+

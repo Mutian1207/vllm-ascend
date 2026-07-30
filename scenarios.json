@@ -1,0 +1,262 @@
+{
+  "defaults": {
+    "model": "/mnt/weight/Qwen3-8B",
+    "device": "10",
+    "profile_root": "/home/lingmutian/tmp/profile_dir",
+    "warmup_rounds": 1,
+    "profile_rounds": 3,
+    "engine": {
+      "max_model_len": 8192,
+      "enforce_eager": true,
+      "async_scheduling": true,
+      "gpu_memory_utilization": 0.8,
+      "tensor_parallel_size": 1,
+      "max_num_seqs": 64,
+      "seed": 42
+    }
+  },
+  "scenarios": [
+    {
+      "id": "T0",
+      "name": "Dense Prefill + Decode 基线",
+      "purpose": "一个场景内分别执行长输入短输出和短输入长输出，覆盖普通 MRv2 输入准备、KV block/slot mapping、step 后处理与基础采样。",
+      "expected_operators": [
+        "_prepare_prefill_inputs_kernel", "_prepare_pos_seq_lens_kernel",
+        "_compute_slot_mappings_kernel", "_gather_block_tables_kernel",
+        "_post_update_kernel", "_get_num_sampled_and_rejected_kernel"
+      ],
+      "cases": [
+        {
+          "name": "prefill_heavy",
+          "count": 8,
+          "prompt_tokens": 4096,
+          "prompt_text": "Explain transformer inference and KV cache management in detail. ",
+          "sampling": {"max_tokens": 32, "temperature": 0.0, "ignore_eos": true, "seed": 42}
+        },
+        {
+          "name": "decode_heavy",
+          "count": 40,
+          "prompt_tokens": 256,
+          "prompt_text": "Write a detailed technical article about compiler optimization. ",
+          "sampling": {"max_tokens": 1024, "temperature": 0.0, "ignore_eos": true, "seed": 42}
+        }
+      ]
+    },
+    {
+      "id": "T1",
+      "name": "Sampling 功能全开",
+      "purpose": "用一个高覆盖请求同时触发随机采样、temperature、min-p、bad words、logit bias、三类 penalty、token 计数与 repetition detection。",
+      "expected_operators": [
+        "_temperature_kernel", "_gumbel_sample_kernel",
+        "tl_rand64 (helper)", "tl_rand32 (helper)", "gumbel_block_argmax (helper)",
+        "_bad_words_kernel", "_bias_kernel", "_min_p_kernel",
+        "_penalties_kernel", "_bincount_kernel", "_apply_write_kernel",
+        "_topk_topp_kernel"
+      ],
+      "cases": [
+        {
+          "name": "sampling_all_on",
+          "count": 64,
+          "prompt_tokens": 256,
+          "prompt_text": "Explain repetition in language models without using the forbidden phrase. ",
+          "sampling": {
+            "max_tokens": 16,
+            "temperature": 0.8,
+            "top_p": 0.9,
+            "top_k": 50,
+            "min_p": 0.1,
+            "presence_penalty": 0.2,
+            "frequency_penalty": 0.2,
+            "repetition_penalty": 1.1,
+            "logit_bias": {"0": -1.0, "1": 0.5},
+            "_bad_words_token_ids": [[0], [1, 2]],
+            "repetition_detection": {"max_pattern_size": 5, "min_pattern_size": 2, "min_count": 3},
+            "ignore_eos": true,
+            "seed": 42
+          }
+        }
+      ]
+    },
+    {
+      "id": "T2",
+      "name": "Generation + Prompt Logprobs",
+      "purpose": "同一请求同时开启生成 token logprobs、指定 token id logprob 和 prompt logprobs，覆盖完整 logprob 后处理链。",
+      "expected_operators": [
+        "_topk_log_softmax_kernel", "_ranks_kernel",
+        "_fill_logprob_token_ids_kernel", "_prompt_logprobs_token_ids_kernel",
+        "_expand_idx_mapping_kernel"
+      ],
+      "cases": [
+        {
+          "name": "all_logprobs",
+          "count": 16,
+          "prompt_tokens": 2048,
+          "prompt_text": "Explain why profiling matters and describe the measurement workflow. ",
+          "sampling": {
+            "max_tokens": 16,
+            "temperature": 0.6,
+            "logprobs": 4,
+            "prompt_logprobs": 5,
+            "logprob_token_ids": [0, 1, 2, 3],
+            "flat_logprobs": true,
+            "ignore_eos": true,
+            "seed": 42
+          }
+        }
+      ]
+    },
+    {
+      "id": "T3",
+      "name": "Structured Output",
+      "purpose": "使用非平凡 JSON Schema 约束每一步可选 token，覆盖 grammar bitmask。",
+      "expected_operators": ["_apply_grammar_bitmask_kernel"],
+      "cases": [
+        {
+          "name": "json_schema",
+          "count": 16,
+          "prompt_tokens": 128,
+          "prompt_text": "Return a person object with name and age. ",
+          "sampling": {
+            "max_tokens": 16,
+            "temperature": 0.7,
+            "structured_outputs": {
+              "json": {
+                "type": "object",
+                "properties": {"name": {"type": "string"}, "age": {"type": "integer"}},
+                "required": ["name", "age"],
+                "additionalProperties": false
+              }
+            },
+            "seed": 42
+          }
+        }
+      ]
+    },
+    {
+      "id": "T4",
+      "name": "NaN Logits 统计",
+      "purpose": "开启 logits NaN 计数开关并执行普通 decode；无需人为制造 NaN，只验证统计 kernel 进入整网路径。",
+      "expected_operators": ["_num_nans_kernel"],
+      "environment": {"VLLM_COMPUTE_NANS_IN_LOGITS": "1"},
+      "cases": [
+        {
+          "name": "nan_metrics",
+          "count": 16,
+          "prompt_tokens": 256,
+          "prompt_text": "Explain numerical stability. ",
+          "sampling": {"max_tokens": 128, "temperature": 0.0, "ignore_eos": true, "seed": 42}
+        }
+      ]
+    },
+    {
+      "id": "T5",
+      "name": "M-RoPE / XD-RoPE 多模态",
+      "purpose": "使用真实 VL checkpoint 和真实图片触发多模态 position 计算；普通文本 Qwen3 无法覆盖。",
+      "expected_operators": ["_prepare_rope_positions_kernel", "_apply_write_kernel"],
+      "model": "${MROPE_MODEL}",
+      "image_path": "${MROPE_IMAGE}",
+      "skip": true,
+      "cases": [
+        {
+          "name": "vl_image_text",
+          "count": 8,
+          "prompt_tokens": 0,
+          "prompt_text": "<|vision_start|><|image_pad|><|vision_end|> Describe the image and spatial relationships.",
+          "sampling": {"max_tokens": 16, "temperature": 0.0, "seed": 42}
+        }
+      ]
+    },
+    {
+      "id": "T6",
+      "name": "Decode Context Parallel",
+      "purpose": "至少双卡并设置 DCP=2，覆盖各 CP rank 的本地 sequence length 计算。",
+      "expected_operators": ["_dcp_local_seq_lens_kernel"],
+      "device": "5,6",
+      "skip": true,
+      "engine": {"decode_context_parallel_size": 2},
+      "cases": [
+        {
+          "name": "dcp_decode",
+          "count": 40,
+          "prompt_tokens": 256,
+          "prompt_text": "Write a long technical explanation. ",
+          "sampling": {"max_tokens": 512, "temperature": 0.0, "ignore_eos": true, "seed": 42}
+        }
+      ]
+    },
+    {
+      "id": "T7",
+      "name": "EAGLE / MTP Spec Decode",
+      "purpose": "启用匹配的主模型与 drafter，覆盖 draft prefill、draft decode、draft state 更新和 sampled/draft token 合并。",
+      "expected_operators": [
+        "speculator._prepare_prefill_inputs_kernel", "_prepare_decode_inputs_kernel",
+        "_update_draft_inputs_kernel", "_combine_sampled_and_draft_tokens_kernel"
+      ],
+      "model": "${SPEC_MAIN_MODEL}",
+      "skip": true,
+      "engine": {
+        "speculative_config": {
+          "model": "${SPEC_DRAFT_MODEL}",
+          "method": "eagle",
+          "num_speculative_tokens": 4
+        }
+      },
+      "cases": [
+        {
+          "name": "eagle_decode",
+          "count": 16,
+          "prompt_tokens": 256,
+          "prompt_text": "Explain speculative decoding in detail. ",
+          "sampling": {"max_tokens": 512, "temperature": 0.8, "top_p": 0.9, "ignore_eos": true, "seed": 42}
+        }
+      ]
+    },
+    {
+      "id": "T8",
+      "name": "DFlash / DSpark Rejection",
+      "purpose": "使用兼容 checkpoint 产生 accepted/rejected draft tokens，覆盖 DFlash 输入、统计、拒绝、重采样、插入和展平。",
+      "expected_operators": [
+        "_prepare_dflash_inputs_kernel", "_compute_block_stats_kernel",
+        "_compute_local_logits_stats_kernel", "_rejection_kernel / _probabilistic_rejection_kernel",
+        "_resample_kernel", "_insert_resampled_kernel", "_flatten_sampled_kernel",
+        "_combine_sampled_and_draft_tokens_kernel"
+      ],
+      "model": "${DFLASH_MODEL}",
+      "skip": true,
+      "engine": {"speculative_config": {"method": "dflash", "num_speculative_tokens": 4}},
+      "cases": [
+        {
+          "name": "dflash_decode",
+          "count": 16,
+          "prompt_tokens": 256,
+          "prompt_text": "Develop a long reasoning chain about compiler optimization. ",
+          "sampling": {"max_tokens": 512, "temperature": 0.8, "top_p": 0.9, "ignore_eos": true, "seed": 42}
+        }
+      ]
+    },
+    {
+      "id": "T9",
+      "name": "Mamba / Hybrid Spec 后处理",
+      "purpose": "同时满足 Mamba/hybrid state 与 speculative accepted-token 后处理，触发 accepted 数量散射。",
+      "expected_operators": ["_scatter_num_accepted_kernel"],
+      "model": "${HYBRID_MODEL}",
+      "skip": true,
+      "engine": {
+        "speculative_config": {
+          "model": "${HYBRID_DRAFT_MODEL}",
+          "method": "eagle",
+          "num_speculative_tokens": 4
+        }
+      },
+      "cases": [
+        {
+          "name": "hybrid_spec",
+          "count": 16,
+          "prompt_tokens": 256,
+          "prompt_text": "Generate a long structured explanation. ",
+          "sampling": {"max_tokens": 512, "temperature": 0.8, "ignore_eos": true, "seed": 42}
+        }
+      ]
+    }
+  ]
+}

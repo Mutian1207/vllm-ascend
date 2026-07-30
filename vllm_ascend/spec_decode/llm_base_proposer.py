@@ -52,12 +52,12 @@ from vllm_ascend.models.llama_eagle3_vwn import Eagle3VwnLlamaForCausalLM
 from vllm_ascend.ops.triton.spec_decode.utils import prepare_inputs_padded_kernel
 from vllm_ascend.ops.triton.triton_utils import get_vectorcore_num
 from vllm_ascend.spec_decode.utils import SlidingWindowAdapter
-from vllm_ascend.utils import check_gdn_layer, enable_sp, lmhead_tp_enable, shared_expert_dp_enabled, vllm_version_is
+from vllm_ascend.utils import check_gdn_layer, enable_sp, lmhead_tp_enable, shared_expert_dp_enabled
 from vllm_ascend.worker.utils import copy_snapshot_to_gpu
 
-if not vllm_version_is("0.24.0"):
+try:
     from vllm.model_executor.models.qwen3_dspark import Qwen3DSparkForCausalLM
-else:
+except ModuleNotFoundError:
     Qwen3DSparkForCausalLM = None
 
 
