@@ -7,7 +7,7 @@
     "profile_rounds": 3,
     "environment": {"VLLM_COMPUTE_NANS_IN_LOGITS": "1"},
     "hot_sampling": {
-      "max_tokens": 64,
+      "max_tokens": 16,
       "temperature": 0.8,
       "top_p": 0.9,
       "top_k": 50,
