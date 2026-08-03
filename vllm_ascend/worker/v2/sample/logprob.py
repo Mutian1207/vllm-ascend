@@ -156,7 +156,12 @@ def compute_topk_logprobs(
         # A request with custom token ids replaces its top-k entries. This is
         # the same layout as upstream's _fill_logprob_token_ids_kernel.
         valid_mask[has_custom_token_ids, 1:] = False
-        custom_token_ids = logprob_token_ids_state.token_ids.gpu
+        # Ascend's indexed assignment requires source and destination dtypes
+        # to match. token_ids is kept as int64 by the scheduler, while the
+        # sampler's token-id buffer follows sampled_token_ids (int32 on NPU).
+        custom_token_ids = logprob_token_ids_state.token_ids.gpu.to(
+            dtype=logprob_token_ids.dtype
+        )
         for column in range(max_per_req_token_ids):
             column_mask = num_token_ids > column
             logprob_token_ids[column_mask, column + 1] = custom_token_ids[
@@ -200,4 +205,3 @@ def compute_topk_logprobs(
         selected_token_ranks=token_ranks,
         cu_num_generated_tokens=cu_num_logits,
     )
-
