@@ -91,7 +91,7 @@
       "cases": [
         {
           "name": "text_hot_all",
-          "count": 16,
+          "count": 64,
           "prompt_tokens": 256,
           "prompt_text": "Answer the question as JSON with answer and confidence fields: explain repetition in language models. ",
           "sampling": {}
