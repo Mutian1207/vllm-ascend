@@ -45,12 +45,11 @@ class AscendDFlashSpeculator(DFlashSpeculator):
         block_tables: Any,
     ) -> None:
         super().set_attn(model_state, kv_cache_config, block_tables)
-        self._context_slot_mappings = torch.zeros(
-            len(self.draft_kv_cache_group_ids),
-            self.max_num_tokens,
-            dtype=torch.int32,
-            device=self.device,
-        )
+        # vLLM v0.24 restricts DFlash to one draft KV-cache group and stores
+        # its context slot buffer in ``context_slot_mapping``. Ascend's Triton
+        # input-preparation kernel writes int32 slots, so keep that buffer in
+        # the device-native index type.
+        self.context_slot_mapping = self.context_slot_mapping.to(torch.int32)
         # npu needs attn_backends to update full graph params in run_fullgraph.
         attn_backends: dict[str, type[AttentionBackend]] = {}
         active_layer_names = self.draft_attn_layer_names
