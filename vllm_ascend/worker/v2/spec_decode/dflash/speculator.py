@@ -150,8 +150,6 @@ def _prepare_dflash_inputs_kernel_ascend(
     num_speculative_steps,
     max_num_reqs,
     max_num_tokens,
-    max_model_len,
-    SAMPLE_FROM_ANCHOR: tl.constexpr,
     PAD_SLOT_ID: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
 ):
@@ -207,19 +205,16 @@ def _prepare_dflash_inputs_kernel_ascend(
         q_slot = q_block_id * block_size + (query_pos % block_size)
 
         tl.store(out_input_ids_ptr + query_idx, input_id)
-        clamped_query_pos = tl.minimum(query_pos, max_model_len - 1)
-        tl.store(out_query_positions_ptr + query_idx, clamped_query_pos)
+        tl.store(out_query_positions_ptr + query_idx, query_pos)
         tl.store(out_query_slot_mapping_ptr + query_idx, q_slot)
 
-    sample_off = 0 if SAMPLE_FROM_ANCHOR else 1
-    # --- Sample indices / positions / idx_mapping ---
-    for s_off in range(sample_off, num_query_per_req):
-        sample_idx = req_idx * num_speculative_steps + (s_off - sample_off)
+    # --- Sample indices / positions / idx_mapping (mask tokens only) ---
+    for s_off in range(1, num_query_per_req):
+        sample_idx = req_idx * num_speculative_steps + (s_off - 1)
         query_idx = query_base + s_off
         query_pos = last_valid_pos + 1 + s_off
-        sample_pos = query_pos + 1 if SAMPLE_FROM_ANCHOR else query_pos
         tl.store(out_sample_indices_ptr + sample_idx, query_idx)
-        tl.store(out_sample_pos_ptr + sample_idx, sample_pos)
+        tl.store(out_sample_pos_ptr + sample_idx, query_pos)
         tl.store(out_sample_idx_mapping_ptr + sample_idx, req_state_idx)
 
     tl.store(out_query_start_loc_ptr + req_idx, query_base)
