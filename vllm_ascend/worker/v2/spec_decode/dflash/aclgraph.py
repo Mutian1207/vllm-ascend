@@ -1,4 +1,4 @@
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from typing import Any
 
 import torch
@@ -30,9 +30,16 @@ class DFlashAclGraphManager(DFlashCudaGraphManager):
         device: torch.device,
         cudagraph_mode: CUDAGraphMode,
         decode_query_len: int,
+        causal: bool = False,
         speculator: Any = None,
     ):
-        super().__init__(vllm_config, device, cudagraph_mode, decode_query_len)
+        super().__init__(
+            vllm_config,
+            device,
+            cudagraph_mode,
+            decode_query_len,
+            causal=causal,
+        )
 
         # It is set by AscendDFlashSpeculator.init_cudagraph_manager after creation,
         # because upstream's init_cudagraph_manager creates the manager without it.
@@ -57,7 +64,6 @@ class DFlashAclGraphManager(DFlashCudaGraphManager):
         attn_groups: list[list[AttentionGroup]],
         kv_cache_config: KVCacheConfig,
         max_model_len: int,
-        causal: bool | Mapping[int, bool],
         progress_bar_desc: str = "Capturing CUDA graphs",
     ) -> None:
         """Capture ACL graphs for DFlash."""
@@ -69,7 +75,6 @@ class DFlashAclGraphManager(DFlashCudaGraphManager):
                 attn_groups,
                 kv_cache_config,
                 max_model_len,
-                causal,
                 progress_bar_desc,
             )
 
