@@ -136,51 +136,63 @@
     },
     {
       "id": "T7",
-      "name": "EAGLE / MTP Spec Decode",
-      "purpose": "启用匹配的主模型与 drafter，覆盖 draft prefill、draft decode、draft state 更新和 sampled/draft token 合并。",
+      "name": "EAGLE3 Spec Decode",
+      "purpose": "使用 Qwen3-8B 与匹配的 EAGLE3 drafter，覆盖 draft prefill、draft decode、draft state 更新和 sampled/draft token 合并。",
       "expected_operators": [
         "speculator._prepare_prefill_inputs_kernel", "_prepare_decode_inputs_kernel",
         "_update_draft_inputs_kernel", "_combine_sampled_and_draft_tokens_kernel"
       ],
-      "model": "${SPEC_MAIN_MODEL}",
-      "skip": true,
+      "model": "/mnt/weight/Qwen3-8B",
+      "replace_hot_sampling": true,
       "engine": {
         "speculative_config": {
-          "model": "${SPEC_DRAFT_MODEL}",
-          "method": "eagle",
-          "num_speculative_tokens": 4
+          "model": "/mnt/weight/Qwen3-8B-speculator.eagle3",
+          "method": "eagle3",
+          "num_speculative_tokens": 3
         }
       },
       "cases": [
         {
           "name": "eagle_decode",
-          "count": 16,
+          "count": 8,
           "prompt_tokens": 256,
           "prompt_text": "Explain speculative decoding in detail. ",
-          "sampling": {}
+          "sampling": {"max_tokens": 16, "temperature": 0.0, "ignore_eos": true, "seed": 42}
         }
       ]
     },
     {
       "id": "T8",
-      "name": "DFlash / DSpark Rejection",
-      "purpose": "使用兼容 checkpoint 产生 accepted/rejected draft tokens，覆盖 DFlash 输入、统计、拒绝、重采样、插入和展平。",
+      "name": "DFlash Parallel Draft",
+      "purpose": "使用 Qwen3-8B 与匹配的 DFlash drafter 产生 accepted/rejected draft tokens，覆盖 DFlash 输入、统计、拒绝、重采样、插入和展平。",
       "expected_operators": [
-        "_prepare_dflash_inputs_kernel", "_compute_block_stats_kernel",
-        "_compute_local_logits_stats_kernel", "_rejection_kernel / _probabilistic_rejection_kernel",
+        "_prepare_dflash_inputs_kernel_ascend", "_compute_block_stats_kernel",
+        "_probabilistic_rejection_kernel",
         "_resample_kernel", "_insert_resampled_kernel", "_flatten_sampled_kernel",
         "_combine_sampled_and_draft_tokens_kernel"
       ],
-      "model": "${DFLASH_MODEL}",
-      "skip": true,
-      "engine": {"speculative_config": {"method": "dflash", "num_speculative_tokens": 4}},
+      "model": "/mnt/weight/Qwen3-8B",
+      "replace_hot_sampling": true,
+      "engine": {
+        "speculative_config": {
+          "model": "/mnt/weight/Qwen3-8B-DFlash-b16",
+          "method": "dflash",
+          "num_speculative_tokens": 8
+        }
+      },
       "cases": [
         {
           "name": "dflash_decode",
-          "count": 16,
+          "count": 8,
           "prompt_tokens": 256,
           "prompt_text": "Develop a long reasoning chain about compiler optimization. ",
-          "sampling": {}
+          "sampling": {
+            "max_tokens": 16,
+            "temperature": 0.0,
+            "logprobs": 4,
+            "ignore_eos": true,
+            "seed": 42
+          }
         }
       ]
     },

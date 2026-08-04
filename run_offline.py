@@ -47,7 +47,10 @@ def describe(scene: dict[str, Any]) -> None:
     print(f"LLM 参数: {json.dumps(scene['engine'], ensure_ascii=False)}")
     print("测试 case:")
     for case in scene["cases"]:
-        sampling = merge(scene.get("hot_sampling", {}), case["sampling"])
+        sampling_base = (
+            {} if scene.get("replace_hot_sampling") else scene.get("hot_sampling", {})
+        )
+        sampling = merge(sampling_base, case["sampling"])
         print(
             f"  - {case['name']}: count={case['count']}, "
             f"prompt_tokens≈{case['prompt_tokens']}, "
@@ -137,7 +140,10 @@ def main() -> None:
         prompts: list[Any] = [prompt] * int(case["count"])
         if image is not None:
             prompts = [{"prompt": prompt, "multi_modal_data": {"image": image}}] * int(case["count"])
-        sampling_kwargs = merge(scene.get("hot_sampling", {}), case["sampling"])
+        sampling_base = (
+            {} if scene.get("replace_hot_sampling") else scene.get("hot_sampling", {})
+        )
+        sampling_kwargs = merge(sampling_base, case["sampling"])
         if "logit_bias" in sampling_kwargs:
             sampling_kwargs["logit_bias"] = {
                 int(token_id): bias
