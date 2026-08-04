@@ -65,6 +65,14 @@ def describe(scene: dict[str, Any]) -> None:
 
 
 def make_prompt(tokenizer: Any, req: dict[str, Any]) -> str:
+    if messages := req.get("messages"):
+        return tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=False,
+        )
+
     target = int(req.get("prompt_tokens", 0))
     text = req["prompt_text"]
     if target <= 0:

@@ -100,19 +100,51 @@
     },
     {
       "id": "T5",
-      "name": "M-RoPE / XD-RoPE 多模态",
-      "purpose": "使用真实 VL checkpoint 和真实图片触发多模态 position 计算；普通文本 Qwen3 无法覆盖。",
-      "expected_operators": ["_prepare_rope_positions_kernel", "_apply_write_kernel"],
-      "model": "${MROPE_MODEL}",
-      "image_path": "${MROPE_IMAGE}",
-      "skip": true,
+      "name": "Qwen3.5 VL + Hybrid MTP + KV Zero",
+      "purpose": "使用 Qwen3.5 多模态 Hybrid 模型和内置 MTP，在同一真实推理场景中覆盖 M-RoPE position、accepted-token 状态散射与新分配 KV block 清零。",
+      "expected_operators": [
+        "_prepare_rope_positions_kernel",
+        "_scatter_num_accepted_kernel",
+        "_zero_kv_blocks_kernel"
+      ],
+      "model": "/mnt/weight/Qwen3.5-35B-A3B-w8a8-mtp",
+      "image_path": "/mnt/weight/MiniMax/MiniMax-M3/figures/benchmark.jpeg",
+      "device": "10,11",
+      "replace_hot_sampling": true,
+      "engine": {
+        "max_model_len": 4096,
+        "tensor_parallel_size": 2,
+        "quantization": "ascend",
+        "enable_expert_parallel": false,
+        "distributed_executor_backend": "mp",
+        "gpu_memory_utilization": 0.9,
+        "max_num_seqs": 8,
+        "speculative_config": {
+          "method": "qwen3_5_mtp",
+          "num_speculative_tokens": 3,
+          "enforce_eager": true
+        }
+      },
       "cases": [
         {
-          "name": "vl_image_text",
+          "name": "qwen35_vl_mtp",
           "count": 8,
           "prompt_tokens": 0,
-          "prompt_text": "<|vision_start|><|image_pad|><|vision_end|> Describe the image and spatial relationships.",
-          "sampling": {}
+          "messages": [
+            {
+              "role": "user",
+              "content": [
+                {"type": "image"},
+                {"type": "text", "text": "Describe the image and explain the spatial relationships between the main objects."}
+              ]
+            }
+          ],
+          "sampling": {
+            "max_tokens": 16,
+            "temperature": 0.0,
+            "ignore_eos": true,
+            "seed": 42
+          }
         }
       ]
     },
@@ -193,30 +225,6 @@
             "ignore_eos": true,
             "seed": 42
           }
-        }
-      ]
-    },
-    {
-      "id": "T9",
-      "name": "Mamba / Hybrid Spec 后处理",
-      "purpose": "同时满足 Mamba/hybrid state 与 speculative accepted-token 后处理，触发 accepted 数量散射。",
-      "expected_operators": ["_scatter_num_accepted_kernel"],
-      "model": "${HYBRID_MODEL}",
-      "skip": true,
-      "engine": {
-        "speculative_config": {
-          "model": "${HYBRID_DRAFT_MODEL}",
-          "method": "eagle",
-          "num_speculative_tokens": 4
-        }
-      },
-      "cases": [
-        {
-          "name": "hybrid_spec",
-          "count": 16,
-          "prompt_tokens": 256,
-          "prompt_text": "Generate a long structured explanation. ",
-          "sampling": {}
         }
       ]
     }
