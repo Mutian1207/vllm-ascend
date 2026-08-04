@@ -19,12 +19,18 @@
 
 from collections.abc import Mapping, Sequence
 from contextlib import contextmanager
+from dataclasses import replace
 from typing import Any
 
 import numpy as np
 import torch
 import vllm
-from vllm.config import VllmConfig, get_current_vllm_config, get_layers_from_vllm_config
+from vllm.config import (
+    VllmConfig,
+    get_current_vllm_config,
+    get_layers_from_vllm_config,
+    set_current_vllm_config,
+)
 from vllm.model_executor.layers.attention import Attention
 from vllm.model_executor.layers.attention.mla_attention import MLAAttention
 from vllm.model_executor.layers.attention_layer_base import AttentionLayerBase
@@ -61,6 +67,10 @@ def get_kv_cache_spec(vllm_config: VllmConfig) -> dict[str, KVCacheSpec]:
             continue
         if isinstance(attn_module, Attention):
             if spec := attn_module.get_kv_cache_spec(vllm_config):
+                backend = attn_module.get_attn_backend()
+                with set_current_vllm_config(vllm_config):
+                    indexes = backend.indexes_kv_by_block_stride()
+                spec = replace(spec, indexes_kv_by_block_stride=indexes)
                 kv_cache_spec[layer_name] = spec
             continue
         if isinstance(attn_module, MLAAttention):
