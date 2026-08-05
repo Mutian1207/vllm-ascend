@@ -66,3 +66,45 @@ def _apply_grammar_bitmask_kernel(
             -float("inf"),
             mask=bitmask & (block_offset < vocab_size),
         )
+
+
+class _ApplyGrammarBitmaskKernelWithDump:
+
+    def __getitem__(self, grid):
+        launcher = _apply_grammar_bitmask_kernel[grid]
+
+        def launch(
+            logits,
+            logits_stride,
+            logits_indices,
+            bitmask,
+            bitmask_stride,
+            vocab_size,
+            BLOCK_SIZE,
+        ):
+            print(
+                "[kernel-shape-dump] _apply_grammar_bitmask_kernel "
+                f"grid={grid} "
+                f"logits.shape={tuple(logits.shape)} logits.dtype={logits.dtype} "
+                f"logits.stride={logits.stride()} logits_stride={logits_stride} "
+                f"logits_indices.shape={tuple(logits_indices.shape)} "
+                f"logits_indices.dtype={logits_indices.dtype} "
+                f"bitmask.shape={tuple(bitmask.shape)} bitmask.dtype={bitmask.dtype} "
+                f"bitmask.stride={bitmask.stride()} bitmask_stride={bitmask_stride} "
+                f"vocab_size={vocab_size} BLOCK_SIZE={BLOCK_SIZE}",
+                flush=True,
+            )
+            return launcher(
+                logits,
+                logits_stride,
+                logits_indices,
+                bitmask,
+                bitmask_stride,
+                vocab_size,
+                BLOCK_SIZE=BLOCK_SIZE,
+            )
+
+        return launch
+
+
+_apply_grammar_bitmask_kernel_with_dump = _ApplyGrammarBitmaskKernelWithDump()

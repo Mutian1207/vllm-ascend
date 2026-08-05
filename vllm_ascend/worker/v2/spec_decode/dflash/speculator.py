@@ -245,3 +245,102 @@ def _prepare_dflash_inputs_kernel_ascend(
         q_pad_start = num_reqs * num_query_per_req
         for i in range(q_pad_start, max_num_tokens):
             tl.store(out_query_slot_mapping_ptr + i, PAD_SLOT_ID)
+
+
+class _PrepareDFlashInputsKernelWithDump:
+
+    def __getitem__(self, grid):
+        launcher = _prepare_dflash_inputs_kernel_ascend[grid]
+
+        def launch(
+            out_input_ids,
+            out_query_positions,
+            out_query_start_loc,
+            out_seq_lens,
+            out_query_slot_mapping,
+            out_context_positions,
+            out_context_slot_mapping,
+            out_sample_indices,
+            out_sample_pos,
+            out_sample_idx_mapping,
+            target_positions,
+            target_query_start_loc,
+            idx_mapping,
+            last_sampled,
+            next_prefill_tokens,
+            num_sampled,
+            num_rejected,
+            block_table,
+            block_table_stride,
+            parallel_drafting_token_id,
+            block_size,
+            num_query_per_req,
+            num_speculative_steps,
+            max_num_reqs,
+            max_num_tokens,
+            PAD_SLOT_ID,
+            BLOCK_SIZE,
+        ):
+            print(
+                "[kernel-shape-dump] _prepare_dflash_inputs_kernel "
+                f"grid={grid} "
+                f"out_input_ids.shape={tuple(out_input_ids.shape)} "
+                f"out_query_positions.shape={tuple(out_query_positions.shape)} "
+                f"out_query_start_loc.shape={tuple(out_query_start_loc.shape)} "
+                f"out_seq_lens.shape={tuple(out_seq_lens.shape)} "
+                f"out_query_slot_mapping.shape={tuple(out_query_slot_mapping.shape)} "
+                f"out_context_positions.shape={tuple(out_context_positions.shape)} "
+                f"out_context_slot_mapping.shape={tuple(out_context_slot_mapping.shape)} "
+                f"out_sample_indices.shape={tuple(out_sample_indices.shape)} "
+                f"out_sample_pos.shape={tuple(out_sample_pos.shape)} "
+                f"out_sample_idx_mapping.shape={tuple(out_sample_idx_mapping.shape)} "
+                f"target_positions.shape={tuple(target_positions.shape)} "
+                f"target_query_start_loc.shape={tuple(target_query_start_loc.shape)} "
+                f"idx_mapping.shape={tuple(idx_mapping.shape)} "
+                f"last_sampled.shape={tuple(last_sampled.shape)} "
+                f"next_prefill_tokens.shape={tuple(next_prefill_tokens.shape)} "
+                f"num_sampled.shape={tuple(num_sampled.shape)} "
+                f"num_rejected.shape={tuple(num_rejected.shape)} "
+                f"block_table.shape={tuple(block_table.shape)} "
+                f"block_table_stride={block_table_stride} "
+                f"parallel_drafting_token_id={parallel_drafting_token_id} "
+                f"block_size={block_size} num_query_per_req={num_query_per_req} "
+                f"num_speculative_steps={num_speculative_steps} "
+                f"max_num_reqs={max_num_reqs} max_num_tokens={max_num_tokens} "
+                f"PAD_SLOT_ID={PAD_SLOT_ID} BLOCK_SIZE={BLOCK_SIZE}",
+                flush=True,
+            )
+            return launcher(
+                out_input_ids,
+                out_query_positions,
+                out_query_start_loc,
+                out_seq_lens,
+                out_query_slot_mapping,
+                out_context_positions,
+                out_context_slot_mapping,
+                out_sample_indices,
+                out_sample_pos,
+                out_sample_idx_mapping,
+                target_positions,
+                target_query_start_loc,
+                idx_mapping,
+                last_sampled,
+                next_prefill_tokens,
+                num_sampled,
+                num_rejected,
+                block_table,
+                block_table_stride,
+                parallel_drafting_token_id,
+                block_size,
+                num_query_per_req,
+                num_speculative_steps,
+                max_num_reqs,
+                max_num_tokens,
+                PAD_SLOT_ID=PAD_SLOT_ID,
+                BLOCK_SIZE=BLOCK_SIZE,
+            )
+
+        return launch
+
+
+_prepare_dflash_inputs_kernel_ascend_with_dump = _PrepareDFlashInputsKernelWithDump()
