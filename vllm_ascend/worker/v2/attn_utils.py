@@ -56,23 +56,6 @@ from vllm_ascend.utils import calc_split_factor
 _ATTENTION_MASK_BUILDER = None
 
 
-def _indexes_kv_by_block_stride(backend: type[AttentionBackend]) -> bool:
-    if backend.indexes_kv_by_block_stride():
-        return True
-
-    # Some sparse backends keep KV caches per layer and therefore do not expose
-    # a layered stride order. Page padding is still valid when the physical KV
-    # layout is num-blocks-first: the padded bytes are at the end of each page
-    # and are skipped through the runtime block stride.
-    try:
-        kv_cache_stride_order = backend.get_kv_cache_stride_order(
-            include_num_layers_dimension=False
-        )
-    except (AttributeError, NotImplementedError):
-        return False
-    return bool(kv_cache_stride_order and kv_cache_stride_order[0] == 0)
-
-
 def get_kv_cache_spec(vllm_config: VllmConfig) -> dict[str, KVCacheSpec]:
     """Build Ascend-specific KV cache specs for v2 worker patching."""
     kv_cache_spec: dict[str, KVCacheSpec] = {}
@@ -86,7 +69,7 @@ def get_kv_cache_spec(vllm_config: VllmConfig) -> dict[str, KVCacheSpec]:
             if spec := attn_module.get_kv_cache_spec(vllm_config):
                 backend = attn_module.get_attn_backend()
                 with set_current_vllm_config(vllm_config):
-                    indexes = _indexes_kv_by_block_stride(backend)
+                    indexes = backend.indexes_kv_by_block_stride()
                 spec = replace(spec, indexes_kv_by_block_stride=indexes)
                 kv_cache_spec[layer_name] = spec
             continue
@@ -113,12 +96,6 @@ def get_kv_cache_spec(vllm_config: VllmConfig) -> dict[str, KVCacheSpec]:
         # not need an Ascend layout conversion, but it must remain in the KV
         # cache groups so the matching attention metadata is built at runtime.
         if spec := attn_module.get_kv_cache_spec(vllm_config):
-            backend_getter = getattr(attn_module, "get_attn_backend", None)
-            if isinstance(spec, AttentionSpec) and backend_getter is not None:
-                backend = backend_getter()
-                with set_current_vllm_config(vllm_config):
-                    indexes = _indexes_kv_by_block_stride(backend)
-                spec = replace(spec, indexes_kv_by_block_stride=indexes)
             kv_cache_spec[layer_name] = spec
 
     return kv_cache_spec
