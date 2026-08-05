@@ -81,12 +81,6 @@ def get_kv_cache_spec(vllm_config: VllmConfig) -> dict[str, KVCacheSpec]:
                 dtype=dtype,
                 cache_dtype_str=cache_dtype_str,
             )
-            continue
-        # Hybrid models also contain Mamba/GDN layers. Their cache spec does
-        # not need an Ascend layout conversion, but it must remain in the KV
-        # cache groups so the matching attention metadata is built at runtime.
-        if spec := attn_module.get_kv_cache_spec(vllm_config):
-            kv_cache_spec[layer_name] = spec
 
     return kv_cache_spec
 
