@@ -112,7 +112,7 @@
       "device": "10,11",
       "replace_hot_sampling": true,
       "engine": {
-        "max_model_len": 32768,
+        "max_model_len": 4096,
         "tensor_parallel_size": 2,
         "quantization": "ascend",
         "enable_expert_parallel": false,
