@@ -105,7 +105,13 @@
       "expected_operators": [
         "_prepare_rope_positions_kernel",
         "_scatter_num_accepted_kernel",
-        "_zero_kv_blocks_kernel"
+        "_zero_kv_blocks_kernel",
+        "_prepare_input_buffers_kernel",
+        "_prepare_input_hidden_states_and_embeddings_kernel",
+        "_pad_trailing_draft_slots_kernel",
+        "_cache_inputs_kernel",
+        "_shift_input_ids_kernel",
+        "_shift_input_embeds_kernel"
       ],
       "model": "/mnt/weight/Qwen3.5-35B-A3B-w8a8-mtp",
       "image_path": "/mnt/weight/MiniMax/MiniMax-M3/figures/benchmark.jpeg",
@@ -222,6 +228,72 @@
             "max_tokens": 16,
             "temperature": 0.0,
             "logprobs": 4,
+            "ignore_eos": true,
+            "seed": 42
+          }
+        }
+      ]
+    },
+    {
+      "id": "T9",
+      "name": "Thinking Budget Reasoning",
+      "purpose": "启用 Qwen reasoning chat template 和 thinking_token_budget，覆盖 reasoning token budget 下的 marker cache 更新和 logits 强制结束逻辑。",
+      "expected_operators": [
+        "_update_committed_marker_cache_kernel",
+        "_thinking_budget_kernel"
+      ],
+      "replace_hot_sampling": true,
+      "enable_thinking": true,
+      "cases": [
+        {
+          "name": "qwen3_thinking_budget",
+          "count": 16,
+          "prompt_tokens": 0,
+          "messages": [
+            {
+              "role": "user",
+              "content": "Solve this step by step, but keep the reasoning concise: if a compiler pass reduces memory traffic by 18% and kernel launch overhead by 7%, which bottleneck should we investigate next?"
+            }
+          ],
+          "sampling": {
+            "max_tokens": 128,
+            "temperature": 0.6,
+            "top_p": 0.95,
+            "thinking_token_budget": 32,
+            "ignore_eos": true,
+            "seed": 42
+          }
+        }
+      ]
+    },
+    {
+      "id": "T10",
+      "name": "Mamba Hybrid Align",
+      "purpose": "使用 Mamba/SSM hybrid 模型并开启 align cache mode，通过较长 prompt 和 decode 跨 block boundary，覆盖 Mamba state align preprocess。",
+      "skip": true,
+      "expected_operators": [
+        "preprocess_mamba_align_fused_kernel"
+      ],
+      "model": "${MRV2_MAMBA_MODEL}",
+      "replace_hot_sampling": true,
+      "engine": {
+        "max_model_len": 2048,
+        "max_num_batched_tokens": 2048,
+        "max_num_seqs": 16,
+        "dtype": "float16",
+        "mamba_cache_mode": "align",
+        "mamba_ssm_cache_dtype": "float16",
+        "enforce_eager": true
+      },
+      "cases": [
+        {
+          "name": "mamba_align_long_decode",
+          "count": 8,
+          "prompt_tokens": 1536,
+          "prompt_text": "You are reading a compact synthetic operations ledger. Use only the rows below when answering the final question. Row 001 moves cargo across zones; priority changes with route state. ",
+          "sampling": {
+            "max_tokens": 128,
+            "temperature": 0.0,
             "ignore_eos": true,
             "seed": 42
           }

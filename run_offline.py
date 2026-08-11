@@ -64,13 +64,16 @@ def describe(scene: dict[str, Any]) -> None:
         print("状态: skip=true；填好模型/设备后改为 false")
 
 
-def make_prompt(tokenizer: Any, req: dict[str, Any]) -> str:
+def make_prompt(tokenizer: Any, scene: dict[str, Any], req: dict[str, Any]) -> str:
     if messages := req.get("messages"):
+        enable_thinking = req.get(
+            "enable_thinking", scene.get("enable_thinking", False)
+        )
         return tokenizer.apply_chat_template(
             messages,
             tokenize=False,
             add_generation_prompt=True,
-            enable_thinking=False,
+            enable_thinking=enable_thinking,
         )
 
     target = int(req.get("prompt_tokens", 0))
@@ -144,7 +147,7 @@ def main() -> None:
         from PIL import Image
         image = Image.open(scene["image_path"]).convert("RGB")
     for case in scene["cases"]:
-        prompt = make_prompt(tokenizer, case)
+        prompt = make_prompt(tokenizer, scene, case)
         prompts: list[Any] = [prompt] * int(case["count"])
         if image is not None:
             prompts = [{"prompt": prompt, "multi_modal_data": {"image": image}}] * int(case["count"])
