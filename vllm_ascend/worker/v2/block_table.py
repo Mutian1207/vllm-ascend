@@ -17,7 +17,10 @@
 # This file is a part of the vllm-ascend project.
 #
 import torch
+from vllm.v1.attention.backends.utils import PAD_SLOT_ID
 from vllm.v1.worker.gpu.block_table import BlockTables
+
+from vllm_ascend.triton_shape_dump import dump_triton_kernel_shapes
 
 
 class AscendBlockTables(BlockTables):
@@ -58,4 +61,44 @@ class AscendBlockTables(BlockTables):
             self.max_num_batched_tokens,
             dtype=torch.int32,
             device=self.device,
+        )
+
+    def compute_slot_mappings(
+        self,
+        idx_mapping: torch.Tensor,
+        query_start_loc: torch.Tensor,
+        positions: torch.Tensor,
+        num_tokens_padded: int,
+        out: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        num_reqs = idx_mapping.shape[0]
+        slot_mappings = self.slot_mappings if out is None else out
+        dump_triton_kernel_shapes(
+            "_compute_slot_mappings_kernel",
+            (self.num_kv_cache_groups, num_reqs + 1),
+            {
+                "max_num_tokens": slot_mappings.shape[1],
+                "idx_mapping": idx_mapping,
+                "query_start_loc": query_start_loc,
+                "pos": positions,
+                "block_table_ptrs": self.block_table_ptrs,
+                "block_table_strides": self.block_table_strides,
+                "block_sizes": self.block_sizes_tensor,
+                "slot_mappings": slot_mappings,
+                "slot_mappings_stride": slot_mappings.stride(0),
+                "cp_rank": self.cp_rank,
+                "CP_SIZE": self.cp_size,
+                "CP_INTERLEAVE": self.cp_interleave,
+                "PAD_ID": PAD_SLOT_ID,
+                "TRITON_BLOCK_SIZE": 1024,
+            },
+            launch_config={
+                "kv_cache_groups": self.num_kv_cache_groups,
+                "request_programs": num_reqs + 1,
+                "token_tile_size": 1024,
+                "max_num_tokens": slot_mappings.shape[1],
+            },
+        )
+        return super().compute_slot_mappings(
+            idx_mapping, query_start_loc, positions, num_tokens_padded, out
         )
