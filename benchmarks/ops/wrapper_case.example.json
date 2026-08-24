@@ -1,0 +1,10 @@
+{
+  "kernel": "get_num_nans",
+  "arguments": {
+    "logits": {
+      "shape": [8, 151936],
+      "dtype": "torch.float32",
+      "initializer": "zeros"
+    }
+  }
+}

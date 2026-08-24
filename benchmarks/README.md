@@ -4,6 +4,69 @@
 
 This document outlines the benchmarking methodology for vllm-ascend, aimed at evaluating the performance under a variety of workloads. The primary goal is to help developers assess whether their pull requests improve or degrade vllm-ascend's performance.
 
+## Benchmark a single operator wrapper
+
+`benchmarks/ops/benchmark_wrapper.py` measures a Python wrapper on NPU. The
+wrapper is identified by `file.py:function`, while its captured inputs come
+from JSON or JSONL. The tool performs warmup calls and reports the latency of
+every profiling round plus summary percentiles.
+
+Use `--mode wrapper` for a regular Python call:
+
+```bash
+python benchmarks/ops/benchmark_wrapper.py \
+  --input-file benchmarks/ops/wrapper_case.example.json \
+  --wrapper /path/to/logits.py:get_num_nans \
+  --mode wrapper \
+  --device npu:0 \
+  --warmup 10 \
+  --profiling-rounds 100 \
+  --output /tmp/num_nans_latency.json
+```
+
+Each input record contains an `arguments` object whose fields are passed to the
+wrapper as keyword arguments. A tensor argument is identified by its `shape`;
+it may also define `dtype`, `device`, and `initializer` (`zeros`, `ones`,
+`full`, `rand`, `randn`, `randint`, or `arange`). Other JSON values are passed
+through as regular Python values.
+
+Use `--mode triton` to replay a raw Triton launch. In this mode every selected
+record must contain `grid`; the runner executes
+`kernel[tuple(grid)](**arguments)`. `launch_config` is retained as capture
+metadata but is not passed to the kernel because compile-time arguments are
+already present in `arguments`.
+
+```bash
+python benchmarks/ops/benchmark_wrapper.py \
+  --input-file /path/to/captured_shapes.jsonl \
+  --wrapper /path/to/penalties.py:_bincount_kernel \
+  --mode triton \
+  --kernel _bincount_kernel \
+  --device npu:0 \
+  --warmup 10 \
+  --profiling-rounds 100
+```
+
+Captured JSONL records that use an `arguments` object are also accepted. When a
+whole-model capture contains several kernels, use `--kernel` to select the input
+records belonging to the operator being measured:
+
+```bash
+python benchmarks/ops/benchmark_wrapper.py \
+  --input-file /path/to/captured_shapes.jsonl \
+  --wrapper /path/to/operator_file.py:wrapper_name \
+  --mode wrapper \
+  --kernel _kernel_name_in_capture \
+  --max-cases 3 \
+  --device npu:0 \
+  --warmup 10 \
+  --profiling-rounds 100
+```
+
+Input tensors are allocated once and reused across all rounds. Operators that
+mutate inputs must account for this in their wrapper or input design. The tool
+measures execution only; numerical correctness belongs in a corresponding UT.
+
 ## Overview
 
 **Benchmarking Coverage**: We measure latency, throughput, and fixed-QPS serving on the Atlas800I A2 (see [quick_start](../docs/source/quick_start.md) to learn more supported devices list), with different models(coming soon).
