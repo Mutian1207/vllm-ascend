@@ -6,4 +6,4 @@ def apply_top_k_top_p(logits: torch.Tensor, k: torch.Tensor | None, p: torch.Ten
     if k is None and p is None:
         return logits
     # use cann ops
-    return torch_npu.npu_top_k_top_p(logits, k, p)
+    return torch_npu.npu_top_k_top_p(logits, p, k)
