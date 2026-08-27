@@ -49,13 +49,18 @@ def select_cases(
     cases: list[dict[str, Any]],
     kernel: str | None,
     max_cases: int | None = None,
+    case_name: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Select one kernel from a mixed whole-model capture."""
+    """Select kernel records and, optionally, one named case from a capture."""
     if max_cases is not None and max_cases <= 0:
         raise ValueError("max_cases must be a positive integer")
     selected = cases if kernel is None else [case for case in cases if case.get("kernel") == kernel]
     if not selected:
         raise ValueError(f"No input records found for kernel: {kernel}")
+    if case_name is not None:
+        selected = [case for case in selected if case.get("name") == case_name]
+        if not selected:
+            raise ValueError(f"No input record found for case name: {case_name}")
     return selected[:max_cases]
 
 
@@ -89,7 +94,11 @@ def _resolve_dtype(name: str) -> torch.dtype:
     return dtype
 
 
-def _make_tensor(spec: dict[str, Any], default_device: str) -> torch.Tensor:
+def _make_tensor(
+    spec: dict[str, Any],
+    default_device: str,
+    keepalive: list[torch.Tensor] | None = None,
+) -> torch.Tensor:
     shape = spec.get("shape")
     if not isinstance(shape, list) or not all(isinstance(size, int) and size >= 0 for size in shape):
         raise ValueError(f"Tensor shape must be a list of non-negative integers: {shape!r}")
@@ -97,6 +106,22 @@ def _make_tensor(spec: dict[str, Any], default_device: str) -> torch.Tensor:
     dtype = _resolve_dtype(spec.get("dtype", "float32"))
     device = spec.get("device", default_device)
     initializer = spec.get("initializer", "zeros")
+
+    if initializer == "data_ptrs":
+        pointee_specs = spec.get("pointees")
+        if not isinstance(pointee_specs, list) or not pointee_specs or not all(
+            isinstance(pointee_spec, dict) for pointee_spec in pointee_specs
+        ):
+            raise ValueError("data_ptrs initializer requires a non-empty 'pointees' list")
+        if len(shape) != 1 or shape[0] != len(pointee_specs):
+            raise ValueError("data_ptrs tensor shape must match the number of pointees")
+        if dtype != torch.uint64:
+            raise ValueError("data_ptrs initializer requires dtype torch.uint64")
+
+        pointees = [_make_tensor(pointee_spec, default_device, keepalive) for pointee_spec in pointee_specs]
+        if keepalive is not None:
+            keepalive.extend(pointees)
+        return torch.tensor([tensor.data_ptr() for tensor in pointees], dtype=dtype, device=device)
 
     if initializer == "zeros":
         return torch.zeros(shape, dtype=dtype, device=device)
@@ -111,19 +136,28 @@ def _make_tensor(spec: dict[str, Any], default_device: str) -> torch.Tensor:
     if initializer == "randint":
         return torch.randint(spec.get("low", 0), spec["high"], shape, dtype=dtype, device=device)
     if initializer == "arange":
-        tensor = torch.arange(math.prod(shape), dtype=dtype, device=device)
+        start = spec.get("start", 0)
+        step = spec.get("step", 1)
+        if not isinstance(start, (int, float)) or not isinstance(step, (int, float)) or step == 0:
+            raise ValueError("arange initializer requires numeric 'start' and non-zero 'step'")
+        stop = start + math.prod(shape) * step
+        tensor = torch.arange(start, stop, step, dtype=dtype, device=device)
         return tensor.reshape(shape)
     raise ValueError(f"Unsupported tensor initializer: {initializer!r}")
 
 
-def materialize(value: Any, default_device: str) -> Any:
+def materialize(
+    value: Any,
+    default_device: str,
+    keepalive: list[torch.Tensor] | None = None,
+) -> Any:
     """Recursively turn tensor specifications into tensors."""
     if isinstance(value, dict) and "shape" in value:
-        return _make_tensor(value, default_device)
+        return _make_tensor(value, default_device, keepalive)
     if isinstance(value, dict):
-        return {key: materialize(item, default_device) for key, item in value.items()}
+        return {key: materialize(item, default_device, keepalive) for key, item in value.items()}
     if isinstance(value, list):
-        return [materialize(item, default_device) for item in value]
+        return [materialize(item, default_device, keepalive) for item in value]
     return value
 
 
@@ -203,9 +237,10 @@ def benchmark_case(case: dict[str, Any]) -> dict[str, Any]:
 
     torch.npu.set_device(device)
     wrapper = resolve_wrapper(wrapper_path)
-    args = materialize(case.get("args", []), device)
+    keepalive: list[torch.Tensor] = []
+    args = materialize(case.get("args", []), device, keepalive)
     raw_kwargs = case.get("kwargs", case.get("arguments", {}))
-    kwargs = materialize(raw_kwargs, device)
+    kwargs = materialize(raw_kwargs, device, keepalive)
     if not isinstance(args, list) or not isinstance(kwargs, dict):
         raise ValueError("args must be a list and kwargs must be an object")
     invoke = build_invoker(wrapper, mode, case.get("grid"))
@@ -231,6 +266,7 @@ def benchmark_case(case: dict[str, Any]) -> dict[str, Any]:
         "mode": mode,
         "kernel": case.get("kernel"),
         "grid": case.get("grid") if mode == "triton" else None,
+        "launch_config": case.get("launch_config"),
         "device": device,
         "warmup": warmup,
         "profiling_rounds": profiling_rounds,
@@ -271,6 +307,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--wrapper", required=True, help="Wrapper or Triton kernel (file.py:function)")
     parser.add_argument("--mode", choices=("wrapper", "triton"), default="wrapper")
     parser.add_argument("--kernel", help="Select this kernel from a mixed captured input file")
+    parser.add_argument("--case-name", help="Select one named case after kernel filtering")
     parser.add_argument("--max-cases", type=int, help="Benchmark only the first N selected input records")
     parser.add_argument("--device", default="npu:0", help="NPU device")
     parser.add_argument("--warmup", type=int, default=10, help="Warmup rounds")
@@ -281,7 +318,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    cases = select_cases(load_cases(args.input_file), args.kernel, args.max_cases)
+    cases = select_cases(load_cases(args.input_file), args.kernel, args.max_cases, args.case_name)
     results = [benchmark_case(_override(case, args)) for case in cases]
     encoded = json.dumps(results, indent=2)
     if args.output:

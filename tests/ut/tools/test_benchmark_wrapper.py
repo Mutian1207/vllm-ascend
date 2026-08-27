@@ -37,6 +37,21 @@ def test_select_cases_from_mixed_capture():
     assert benchmark_wrapper.select_cases(cases, "first", max_cases=1) == [cases[0]]
 
 
+def test_select_cases_by_name_after_kernel_filtering():
+    cases = [
+        {"name": "decode-8", "kernel": "first"},
+        {"name": "tile-8", "kernel": "first"},
+        {"name": "tile-8", "kernel": "second"},
+    ]
+
+    assert benchmark_wrapper.select_cases(cases, "first", case_name="tile-8") == [cases[1]]
+
+
+def test_select_cases_rejects_missing_case_name():
+    with pytest.raises(ValueError, match="case name"):
+        benchmark_wrapper.select_cases([{"name": "first", "kernel": "first"}], "first", case_name="missing")
+
+
 def test_select_cases_rejects_missing_kernel():
     with pytest.raises(ValueError, match="No input records"):
         benchmark_wrapper.select_cases([{"kernel": "first"}], "missing")
@@ -127,6 +142,49 @@ def test_materialize_cpu_tensor():
     assert value.tolist() == [[1, 1, 1], [1, 1, 1]]
 
 
+def test_materialize_arange_with_start_and_step():
+    value = benchmark_wrapper.materialize(
+        {
+            "shape": [4],
+            "dtype": "torch.int32",
+            "initializer": "arange",
+            "start": 3,
+            "step": 2,
+        },
+        "cpu",
+    )
+
+    assert value.tolist() == [3, 5, 7, 9]
+
+
+def test_materialize_data_ptrs_keeps_pointees_alive():
+    keepalive = []
+    pointers = benchmark_wrapper.materialize(
+        {
+            "shape": [2],
+            "dtype": "torch.uint64",
+            "initializer": "data_ptrs",
+            "pointees": [
+                {"shape": [2, 3], "dtype": "torch.int32", "initializer": "zeros"},
+                {"shape": [4], "dtype": "torch.float32", "initializer": "ones"},
+            ],
+        },
+        "cpu",
+        keepalive,
+    )
+
+    assert pointers.dtype == benchmark_wrapper.torch.uint64
+    assert pointers.tolist() == [tensor.data_ptr() for tensor in keepalive]
+
+
+def test_materialize_data_ptrs_validates_pointees():
+    with pytest.raises(ValueError, match="non-empty 'pointees'"):
+        benchmark_wrapper.materialize(
+            {"shape": [1], "dtype": "torch.uint64", "initializer": "data_ptrs"},
+            "cpu",
+        )
+
+
 def test_arguments_field_can_supply_keyword_arguments(monkeypatch):
     calls = []
 
@@ -161,6 +219,7 @@ def test_arguments_field_can_supply_keyword_arguments(monkeypatch):
 
     assert calls == [{"block_size": 128}] * 3
     assert result["latencies_ms"] == [1.25, 1.25]
+    assert result["launch_config"] is None
 
 
 def test_device_override_rewrites_captured_tensor_devices():
