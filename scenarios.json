@@ -1,7 +1,7 @@
 {
   "defaults": {
     "model": "/mnt/weight/Qwen3-8B",
-    "device": "10",
+    "device": "0",
     "profile_root": "/home/lingmutian/tmp/profile_dir",
     "warmup_rounds": 1,
     "profile_rounds": 3,
@@ -226,7 +226,7 @@
           "prompt_text": "Develop a long reasoning chain about compiler optimization. ",
           "sampling": {
             "max_tokens": 16,
-            "temperature": 0.0,
+            "temperature": 0.9,
             "logprobs": 4,
             "ignore_eos": true,
             "seed": 42
