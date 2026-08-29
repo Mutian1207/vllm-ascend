@@ -47,7 +47,6 @@ rejection_sampler.rejection_sample = npu_rejection_sample
 topk_topp_sampler.apply_top_k_top_p_triton = apply_top_k_top_p_npu
 # triton ops that filed in ops/triton
 structured_outputs._apply_grammar_bitmask_kernel = _apply_grammar_bitmask_kernel
-mamba_utils.precopy_mamba_align_fused_kernel = precopy_mamba_align_fused_kernel
 # triton ops that filed in ops/triton
 # This patch may be revisited or reverted once the compiler and Triton Ascend toolkit
 # support the upstream implementation of fill_logprob_token_ids_kernel.
